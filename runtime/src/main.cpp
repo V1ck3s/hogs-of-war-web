@@ -2131,9 +2131,15 @@ static bool       s_drc_ready = false;
  * the bridge from a single build; default (unset) = bridge/pull model. Output
  * health is surfaced through the audio_stats TCP command (no stderr probe). */
 static bool audio_legacy_mode(void) {
+#if defined(PSX_WEB)
+    /* The browser bridge consumes the existing deterministic queued-audio
+     * path; Web Audio performs host-rate conversion. */
+    return true;
+#else
     static int v = -1;
     if (v < 0) { const char* e = getenv("PSXRECOMP_AUDIO_LEGACY"); v = (e && *e && *e != '0') ? 1 : 0; }
     return v != 0;
+#endif
 }
 /* Legacy-mode underrun counter: incremented when the SDL queue is found empty
  * at pump time (the device was silence-filling = an audible gap). */
@@ -3900,6 +3906,13 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
 #define PAD_CROSS    (1 << 14)
 #define PAD_SQUARE   (1 << 15)
 
+#if defined(PSX_WEB_TEST_ASSETS)
+static int g_web_test_start = 0;
+extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_test_set_start(int down) {
+    g_web_test_start = down != 0;
+}
+#endif
+
 struct ControllerSource {
     enum class Kind {
         None,
@@ -4578,7 +4591,11 @@ static bool controller_source_pressed_h(SDL_GameController* h, const ControllerS
  * Return=Start, RShift=Select) plus T/Y=L3/R3 stick clicks. */
 static uint16_t pad_from_keyboard(int player) {
     const Uint8* keys = SDL_GetKeyboardState(NULL);
-    return psx_keybinds_pad_word(keys, player);
+    uint16_t word = psx_keybinds_pad_word(keys, player);
+#if defined(PSX_WEB_TEST_ASSETS)
+    if (player == 1 && g_web_test_start) word &= (uint16_t)~PAD_START;
+#endif
+    return word;
 }
 
 /* A left/right ANALOG-STICK axis source (LEFTX/LEFTY/RIGHTX/RIGHTY), as opposed
@@ -6596,6 +6613,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     extern uint64_t s_frame_count;
     s_frame_count++;
     int override = -1;
+#if defined(PSX_WEB_TEST_ASSETS)
+    if (g_web_test_start) override = (int)(0xFFFFu & ~(uint16_t)PAD_START);
+#endif
 #endif
 
     {
@@ -15443,6 +15463,13 @@ session_reboot:
      * native backend (Metal on Apple Silicon). PRESENTVSYNC removes tearing;
      * fall back progressively if a driver can't provide vsync/accel. */
   if (!g_gl_active && !g_vk_active) {
+#if defined(PSX_WEB)
+    /* The PS1 rasterizer is already software. SDL's accelerated web presenter
+     * tries to own a GLES context from the emulation pthread; use the canvas
+     * software presenter, whose browser operations are safely proxied. */
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+    Uint32 rflags = SDL_RENDERER_SOFTWARE;
+#else
 #ifdef _WIN32
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 #endif
@@ -15451,9 +15478,15 @@ session_reboot:
     Uint32 rflags = SDL_RENDERER_ACCELERATED |
                     (present_effective_swap_interval() != 0
                          ? SDL_RENDERER_PRESENTVSYNC : 0u);
+#endif
     sdl_renderer = SDL_CreateRenderer(sdl_window, -1, rflags);
+#if defined(PSX_WEB)
+    if (!sdl_renderer)
+        sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_SOFTWARE);
+#else
     if (!sdl_renderer)
         sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED);
+#endif
     if (!sdl_renderer) {
         std::fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
         return 1;

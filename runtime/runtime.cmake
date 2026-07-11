@@ -280,7 +280,13 @@ if(_psx_sdl_backend STREQUAL "SDL3")
     endif()
     message(STATUS "psxrecomp: SDL backend = SDL3")
 else()
-    if(NOT SDL2_INCLUDE_DIRS OR NOT SDL2_LIBRARIES)
+    if(EMSCRIPTEN)
+        # SDL2 comes from Emscripten's maintained port (--use-port=sdl2, added
+        # per target below), not from a host pkg-config package.
+        set(SDL2_INCLUDE_DIRS "${CMAKE_SYSROOT}/include/SDL2")
+        set(SDL2_LIBRARIES "")
+    endif()
+    if(NOT EMSCRIPTEN AND (NOT SDL2_INCLUDE_DIRS OR NOT SDL2_LIBRARIES))
         if(MSVC)
             file(GLOB SDL2_MSVC_DIR "${PSXRECOMP_ROOT}/../sdl2-msvc/SDL2-*")
             if(SDL2_MSVC_DIR)
@@ -1748,7 +1754,27 @@ function(psxrecomp_add_runtime_target target)
     # --static link line (libSDL2.a + the full Windows system-lib chain SDL2
     # needs: winmm, imm32, ole32, oleaut32, version, setupapi, dinput8, ...).
     # Otherwise link the SDL2 import lib (needs SDL2.dll at runtime).
-    if(PSX_STATIC_RUNTIME AND PSX_SDL_STATIC_LDFLAGS)
+    if(EMSCRIPTEN)
+        target_compile_options(${target} PRIVATE
+            "--use-port=sdl2"
+            "-pthread")
+        target_link_options(${target} PRIVATE
+            "--use-port=sdl2"
+            "-pthread"
+            "-sPROXY_TO_PTHREAD=1"
+            "-sPTHREAD_POOL_SIZE=2"
+            "-sALLOW_MEMORY_GROWTH=1"
+            "-sINITIAL_MEMORY=402653184"
+            "-sMAXIMUM_MEMORY=1073741824"
+            "-sSTACK_SIZE=8388608"
+            "-sDEFAULT_PTHREAD_STACK_SIZE=16777216"
+            "-sNO_DISABLE_EXCEPTION_CATCHING"
+            "-sFORCE_FILESYSTEM=1"
+            "-sEXIT_RUNTIME=0")
+        target_compile_definitions(${target} PRIVATE
+            PSX_WEB=1
+            PSX_NO_DEBUG_TOOLS=1)
+    elseif(PSX_STATIC_RUNTIME AND PSX_SDL_STATIC_LDFLAGS)
         target_link_libraries(${target} PRIVATE ${PSX_SDL_STATIC_LDFLAGS})
     else()
         target_link_libraries(${target} PRIVATE ${PSX_SDL_LIBRARIES})
@@ -2080,7 +2106,10 @@ function(psxrecomp_add_runtime_target target)
             RECOMP_UI_PSX_HAS_REWIND=$<BOOL:${PSXRECOMP_HAS_RBENGINE_SNAP}>)
     endif()
 
-    if(WIN32 OR MINGW)
+    if(EMSCRIPTEN)
+        # SDL's browser backend owns the WebGL/canvas integration. The first
+        # web milestone deliberately uses the portable software renderer.
+    elseif(WIN32 OR MINGW)
         # opengl32: GL backend (gpu_gl_renderer.c). GL 1.x is exported directly
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
         # iphlpapi: GetAdaptersAddresses in the launcher's netplay

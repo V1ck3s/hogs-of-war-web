@@ -32,7 +32,11 @@ extern "C" {
  * window retrospectives without per-second eviction.
  * Definition uses PSX_BSS so the zeros stay out of the PE image (MinGW+LTO
  * otherwise stuffed this into .rdata and bloated Windows .exe by ~144MiB). */
+#ifdef PSX_WEB
+#define FNTRACE_RING_CAP (1u << 12)
+#else
 #define FNTRACE_RING_CAP (1u << 22)
+#endif
 
 typedef struct {
     uint32_t frame;     /* s_frame_count at dispatch */
