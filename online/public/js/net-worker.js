@@ -24,17 +24,19 @@ function views() {
 function tick() {
   views();
   const status = mem.status >> 2;
-  const cur = Atomics.load(mem.u32, status);              // last frame consumed
+  // Last frame the game consumed; a game that just loaded a snapshot has not
+  // consumed any of the new schedule yet: count from its first frame.
+  const cur = Math.max(Atomics.load(mem.u32, status), ls.start);
   const batch = ls.local(cur, word);
   if (batch) postMessage({ t: 'send', msg: { t: 'in', f: batch.f, w: batch.w } });
   ls.pump(cur + mem.ring - 8, (f, words) => {
     const slot = f % mem.ring;
-    const base = (mem.words >> 1) + slot * mem.maxp;
+    const base = (mem.words >> 1) + slot * mem.stride;
     for (let p = 0; p < mem.maxp; p++) mem.u16[base + p] = p < words.length ? words[p] : NEUTRAL;
+    mem.u16[base + mem.maxp] = ls.control(f);
     const tag = (mem.tags >> 2) + slot;
     Atomics.store(mem.u32, tag, f + 1);
     Atomics.notify(mem.i32, tag);
-    if (f < 2) postMessage({ t: 'log', text: `publish ${f} tag@${tag * 4}=${Atomics.load(mem.u32, tag)} buf=${mem.memory.buffer.byteLength}` });
   });
   const hf = Atomics.load(mem.u32, status + 6);
   const h = Atomics.load(mem.u32, status + 2);
@@ -49,6 +51,13 @@ function tick() {
       postMessage({ t: early.h === h ? 'hashok' : 'desync', f: hf, from: early.p });
     }
   }
+}
+
+function clearTags() {
+  views();
+  const t0 = mem.tags >> 2;
+  for (let i = 0; i < mem.ring; i++) Atomics.store(mem.u32, t0 + i, 0);
+  for (let i = 0; i < mem.ring; i++) Atomics.notify(mem.i32, t0 + i);
 }
 
 let statsAt = 0;
@@ -69,10 +78,25 @@ onmessage = (e) => {
   const m = e.data;
   switch (m.t) {
     case 'start':
-      mem = { memory: m.memory, tags: m.tags, words: m.words, status: m.status, ring: m.ring, maxp: m.maxp };
-      ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay });
+      mem = { memory: m.memory, tags: m.tags, words: m.words, status: m.status, ring: m.ring, maxp: m.maxp, stride: m.stride };
+      ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start || 0, host: m.host || 0 });
+      if (m.start) clearTags();
       clearInterval(timer);
       timer = setInterval(loop, 2);
+      break;
+    case 'resync':
+      // Everyone reloads the same snapshot: a new schedule from its frame. The
+      // ring is emptied first so that the game never takes a stale frame of
+      // the previous schedule (peers ahead of the snapshot rewind to it).
+      ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start, host: m.host });
+      for (const [i, after] of m.dropped || []) ls.drop(i, after);
+      clearTags();
+      hashes.clear(); pendingHashes.clear();
+      // The game's last digest belongs to the old timeline (a peer ahead of
+      // the snapshot computed it before rewinding): never report it.
+      views();
+      lastHashFrame = Atomics.load(mem.u32, (mem.status >> 2) + 6);
+      postMessage({ t: 'resync-ready', start: m.start });
       break;
     case 'mask':
       word = ~m.mask & NEUTRAL;

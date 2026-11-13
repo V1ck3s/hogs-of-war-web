@@ -57,6 +57,8 @@ const preload = (async () => {
 preload.then(() => { $('#preload').textContent = 'Jeu chargé : prêt à jouer.'; })
   .catch((e) => { $('#preload').textContent = `Jeu indisponible : ${e.message}`; });
 $('#preload').textContent = 'Chargement du jeu en arrière-plan…';
+// Disc prefetch into the browser cache (lobby first, then read-ahead in game).
+try { new Worker('js/disc-worker.js'); } catch { /* streaming still works */ }
 
 // ------------------------------------------------------------------ socket
 function connect() {
@@ -66,7 +68,9 @@ function connect() {
     ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: $('#name').value.trim() || 'Cochon' }));
     ws.onerror = () => reject(new Error('Connexion au serveur impossible.'));
     ws.onclose = () => { if (state.room) toast('Connexion au serveur perdue.', 8000); };
+    ws.binaryType = 'arraybuffer';
     ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') { onSnapshot(e.data); return; }
       const m = JSON.parse(e.data);
       if (m.t === 'welcome') { state.id = m.id; resolve(); }
       onMessage(m);
@@ -80,8 +84,15 @@ function onMessage(m) {
   switch (m.t) {
     case 'room': onRoom(m); break;
     case 'go': startGame(m); break;
+    case 'snapreq': takeSnapshot(m); break;
+    case 'resync': state.resyncMeta = m; break;   // the snapshot bytes follow
     case 'ended': stopGame(); show('#room'); toast('Partie terminée par l’hôte.'); break;
-    case 'in': if (state.worker && m.s === state.session) state.worker.postMessage(m); break;
+    case 'in':
+      // A player joining receives inputs while their game is still starting:
+      // keep them for the lockstep worker.
+      if (m.s !== state.session) break;
+      if (state.worker) state.worker.postMessage(m); else (state.inQueue ||= []).push(m);
+      break;
     case 'drop':
       if (state.worker) state.worker.postMessage(m);
       toast(`${state.names.get(m.id) || 'Un joueur'} a quitté la partie : son équipe n’a plus de joueur.`);
@@ -110,6 +121,34 @@ $('#btn-copy2').onclick = copyInvite;
 $('#btn-leave2').onclick = leave;
 $('#btn-leave').onclick = leave;
 $('#btn-start').onclick = () => sendWs({ t: 'start', aspect: chosenAspect() });
+$('#mode').onchange = $('#cpus').onchange = () => sendWs({ t: 'mode', mode: $('#mode').value, cpus: +$('#cpus').value });
+
+// Open rooms, refreshed while the lobby is on screen.
+async function refreshRooms() {
+  if ($('#lobby').hidden) return;
+  let list = [];
+  try { list = await (await fetch('/rooms', { cache: 'no-store' })).json(); } catch { return; }
+  const ul = $('#room-list');
+  ul.textContent = '';
+  for (const x of list) {
+    const li = document.createElement('li');
+    const what = document.createElement('span');
+    what.className = 'what';
+    const b = document.createElement('b');
+    b.textContent = `${x.code} — salon de ${x.host}`;
+    const sm = document.createElement('small');
+    sm.textContent = `${x.mode === 'solo' ? 'Solo' : 'Multijoueur'} · ${x.players} joueur(s)` +
+      (x.state === 'running' ? ' · partie en cours' : ' · en attente');
+    what.append(b, sm);
+    const btn = document.createElement('button');
+    btn.textContent = 'Rejoindre';
+    btn.onclick = () => enter({ t: 'join', code: x.code });
+    li.append(what, btn);
+    ul.append(li);
+  }
+}
+refreshRooms();
+setInterval(refreshRooms, 3000);
 $('#btn-end').onclick = () => sendWs({ t: 'end' });
 function leave() { stopGame(); sendWs({ t: 'leave' }); state.room = null; show('#lobby'); history.replaceState(null, '', location.pathname); }
 
@@ -138,6 +177,14 @@ function onRoom(m) {
   $('#room-code').textContent = m.code;
   $('#room-code2').textContent = m.code;
   history.replaceState(null, '', `?salon=${m.code}`);
+  if (m.mode) $('#mode').value = m.mode;
+  $('#cpus').value = String(m.cpus | 0);
+  $('#cpus-label').hidden = m.mode === 'solo';
+  const players = m.members.filter((x) => x.seat >= 0).length;
+  $('#mode-line').textContent = m.mode === 'solo'
+    ? 'Mode : Solo — campagne « Un joueur » ; l’hôte joue, les autres regardent.'
+    : `Mode : Multijoueur — ${players} équipe(s) de joueurs` + ((m.cpus | 0) ? ` et ${m.cpus} de l’ordinateur` : '') +
+      ' ; chaque joueur règle et commande son équipe.' + (players + (m.cpus | 0) > 4 ? ' (4 équipes au plus : les dernières sont ignorées.)' : '');
   // Seats
   const seats = $('#seats');
   seats.textContent = '';
@@ -225,6 +272,8 @@ async function startGame(go) {
         PSX_WEB_LOCKSTEP: String(go.players.length),
         // The host drives the menus (spectating host: first player).
         PSX_WEB_LOCKSTEP_HOST: String(Math.max(0, go.players.indexOf(go.host))),
+        PSX_WEB_MODE: go.mode || 'multi',
+        PSX_WEB_CPUS: String(go.cpus | 0),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
         ...(params.get('diag') ? { PSX_RUNTIME_PERF_DIAG: '1', PSX_RUNTIME_PERF_DIAG_MS: '5000' } : {}),
@@ -240,6 +289,59 @@ async function startGame(go) {
   document.body.append(s);
 }
 
+// ------------------------------------------------------------------ late join
+// A player (re)joining a running game: the server asks one peer for a
+// snapshot of its game a few frames ahead; then every peer, that one
+// included, reloads it and the new schedule (with the newcomer) starts there.
+function heapU32(Module) { return new Uint32Array(Module.wasmMemory.buffer); }
+
+function stageSnapshot(Module, blob, frame, nplayers) {
+  const bytes = new Uint8Array(blob);
+  const ptr = Module._malloc(bytes.length);
+  new Uint8Array(Module.wasmMemory.buffer).set(bytes, ptr);
+  const mail = Module._psx_web_lockstep_mail() >> 2;
+  const u32 = heapU32(Module);
+  u32[mail + 1] = ptr; u32[mail + 2] = bytes.length; u32[mail + 3] = frame; u32[mail + 4] = nplayers;
+  Atomics.add(u32, mail, 1);
+}
+
+async function takeSnapshot() {
+  const Module = state.game;
+  if (!Module || !Module._psx_web_lockstep_mail) return;
+  const u32 = heapU32(Module);
+  const mail = Module._psx_web_lockstep_mail() >> 2;
+  const cur = Atomics.load(u32, Module._psx_web_lockstep_status() >> 2);
+  const f = cur + 20;
+  u32[mail + 6] = 0;
+  Atomics.store(u32, mail + 5, f);
+  const t0 = performance.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 50));
+    const v = heapU32(Module);
+    const st = v[mail + 6] | 0;
+    if (st === 2 && v[mail + 7] === f) break;
+    if (st === -1 || performance.now() - t0 > 20000) { sendWs({ t: 'snapfail' }); return; }
+  }
+  const data = Module.FS.readFile(Module.UTF8ToString(Module._psx_web_snapshot_path()));
+  sendWs({ t: 'snap', f, size: data.length });
+  state.ws.send(data);
+}
+
+function onSnapshot(buf) {
+  const m = state.resyncMeta;
+  state.resyncMeta = null;
+  if (!m) return;
+  state.session = m.session;
+  state.players = m.players;
+  if (state.game && state.worker) {
+    toast(m.joined ? `${m.joined} rejoint la partie : synchronisation…` : 'Synchronisation de la partie…');
+    state.resyncBlob = buf;
+    state.worker.postMessage({ t: 'resync', players: m.players, me: state.id, delay: m.delay, start: m.f, host: m.hostIndex | 0, dropped: m.dropped });
+  } else {
+    startGame({ ...m, snapshot: buf });
+  }
+}
+
 async function attach(Module, go) {
   const memory = Module.wasmMemory;
   // Lockstep worker: writes every participant's inputs into the game's ring.
@@ -250,6 +352,10 @@ async function attach(Module, go) {
     if (m.t === 'send') sendWs({ ...m.msg, s: state.session });
     else if (m.t === 'stats') onStats(m);
     else if (m.t === 'log') console.log('[lockstep]', m.text);
+    else if (m.t === 'resync-ready' && state.resyncBlob) {
+      stageSnapshot(Module, state.resyncBlob, m.start, state.players.length);
+      state.resyncBlob = null;
+    }
     else if (m.t === 'hashok') { state.hashOk = (state.hashOk || 0) + 1; state.lastHashOk = m.f; }
     else if (m.t === 'desync') console.warn(`[lockstep] désynchronisation image ${m.f}`), state.desyncs = (state.desyncs || 0) + 1, toast(`Désynchronisation détectée à l’image ${m.f} avec ${state.names.get(m.from) || 'un joueur'}.`, 10000);
   };
@@ -258,9 +364,17 @@ async function attach(Module, go) {
     t: 'start', memory,
     tags: Module._psx_web_lockstep_tags(), words: Module._psx_web_lockstep_words(),
     status: Module._psx_web_lockstep_status(), ring: Module._psx_web_lockstep_ring(),
-    maxp: Module._psx_web_lockstep_maxp(),
+    maxp: Module._psx_web_lockstep_maxp(), stride: Module._psx_web_lockstep_stride(),
     players: go.players, me: state.id, delay: go.delay,
+    start: go.snapshot ? go.f : 0, host: go.hostIndex | 0,
   });
+  for (const q of state.inQueue || []) if (q.s === state.session) w.postMessage(q);
+  state.inQueue = [];
+  if (go.snapshot) {
+    // Joining a running game: load the snapshot every peer reloads too.
+    for (const [i, after] of go.dropped || []) w.postMessage({ t: 'drop', id: go.players[i], after });
+    stageSnapshot(Module, go.snapshot, go.f, go.players.length);
+  }
   // Sound: the worklet reads the game's ring directly from shared memory.
   try {
     const ctx = new AudioContext({ latencyHint: 'interactive' });
@@ -293,10 +407,14 @@ function onStats(m) {
   state.lastStats = m;
   const holder = m.holder >= 0 ? state.names.get(state.players[m.holder]) : null;
   const mine = m.holder >= 0 && state.players[m.holder] === state.id;
-  $('#turn').textContent = m.team
-    ? (mine ? `À vous de jouer (équipe ${m.team})` : `Tour de ${holder || '?'} (équipe ${m.team})`)
-    : (holder ? `${holder} a la main` : '');
-  $('#turn').classList.toggle('mine', !!(m.team && mine));
+  // team: battle turn's team number; 0x100 | n while team n is being set up.
+  const setup = m.team & 0x100, team = m.team & 0xff;
+  $('#turn').textContent = setup
+    ? (mine ? `Réglez votre équipe (équipe ${team})` : `${holder || '?'} règle son équipe (équipe ${team})`)
+    : team
+      ? (mine ? `À vous de jouer (équipe ${team})` : `Tour de ${holder || '?'} (équipe ${team})`)
+      : (holder ? `${holder} a la main` : m.holder < 0 && m.frame > 0 ? 'Menus automatiques…' : '');
+  $('#turn').classList.toggle('mine', !!(team && mine));
   const waiting = m.waiting.length ? ` · attente de ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
   $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;
 }
@@ -337,6 +455,7 @@ function toggleFull() {
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); });
 $('#btn-full').onclick = toggleFull;
 $('#btn-panel').onclick = () => { $('#panel').hidden = !$('#panel').hidden; };
+$('#btn-panel-close').onclick = () => { $('#panel').hidden = true; $('#canvas').focus(); };
 
 function chatLine(name, text) {
   const d = document.createElement('div');
@@ -379,4 +498,4 @@ function renderKeys() {
 }
 
 // Test hooks (automated end-to-end tests)
-window.__cdg = { state, input };
+window.__cdg = { state, input, peek: (a) => (state.game && state.game._psx_web_peek32 ? state.game._psx_web_peek32(a) >>> 0 : 0) };

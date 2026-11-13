@@ -20,8 +20,16 @@ label input:not([type=checkbox]):not([type=range]), label select { display: bloc
 .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 8px; }
 .col { background: var(--panel-2); border-radius: 10px; padding: 14px; }
 .join { display: flex; gap: 8px; }
-.join input { flex: 1; min-width: 0; text-transform: uppercase; letter-spacing: .25em; text-align: center; font-size: 18px; }
-.room-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.join input { flex: 1; min-width: 7em; text-transform: uppercase; letter-spacing: .25em; text-align: center; font-size: 18px; }
+.col .join button { width: auto; flex: none; }
+.room-list:empty::before { content: "Aucun salon ouvert pour l’instant."; color: var(--muted); font-size: 13px; }
+.room-list li { list-style: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.room-list li .what { flex: 1; min-width: 0; }
+.room-list li .what small { display: block; color: var(--muted); }
+.col .room-list button { width: auto; flex: none; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; }
+.panel-head h2 { margin: 0; }
+.room-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; padding: 0; }
 .invite { background: #3b2a12; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 12px; }
 .help { color: var(--muted); margin-top: 14px; }
 .help summary { color: var(--text); cursor: pointer; }

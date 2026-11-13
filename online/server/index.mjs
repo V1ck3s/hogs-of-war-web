@@ -78,6 +78,28 @@ function serveDisc(req, res, m) {
   });
   fs.createReadStream(path.join(disc.dir, t.name), { start, end }).pipe(res);
   stats.discBytes += end - start + 1;
+  noteHot(+m[1], i);
+}
+
+// Chunks games need, in order of first use (boot, menus, battles...): the
+// browsers prefetch them while players gather in the lobby (disc-worker.js).
+const HOT_FILE = path.join(GAME, 'hot.json');
+const HOT_MAX = 480;   // 120 MB
+const hot = new Map((readJson(HOT_FILE)?.chunks || []).map(([t, i]) => [`${t}/${i}`, [t, i]]));
+let hotDirty = false;
+function noteHot(t, i) {
+  const k = `${t}/${i}`;
+  if (hot.has(k) || hot.size >= HOT_MAX) return;
+  hot.set(k, [t, i]);
+  hotDirty = true;
+}
+setInterval(() => {
+  if (!hotDirty) return;
+  hotDirty = false;
+  fs.writeFile(HOT_FILE, JSON.stringify({ chunks: [...hot.values()] }), () => {});
+}, 10000).unref();
+function hotList() {
+  return { tracks: disc ? disc.tracks.map((t) => Math.ceil(t.size / disc.chunk)) : [], chunks: [...hot.values()] };
 }
 
 const stats = { discBytes: 0 };
@@ -88,6 +110,21 @@ function handler(req, res) {
   if (p === '/healthz') { res.writeHead(200).end('ok'); return; }
   let m;
   if ((m = /^\/disc\/(\d+)\/(\d+)$/.exec(p))) return serveDisc(req, res, m);
+  if (p === '/disc/hot.json') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...ISOLATION });
+    res.end(JSON.stringify(hotList()));
+    return;
+  }
+  if (p === '/rooms') {
+    // Open rooms for the lobby's list (codes are invitations anyway).
+    const list = [...rooms.values()].map((r) => ({
+      code: r.code, host: clients.get(r.host)?.name || '?', mode: r.mode, state: r.state,
+      players: [...r.seats.values()].filter((s) => s >= 0).length,
+    }));
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...ISOLATION });
+    res.end(JSON.stringify(list));
+    return;
+  }
   if (p === '/game/info.json') {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache', ...ISOLATION });
     res.end(JSON.stringify({ ready: !!manifest, version: manifest?.version, maxPlayers: MAX_PLAYERS }));
@@ -120,7 +157,7 @@ function send(c, obj) { if (c && c.ws.readyState === 1) c.ws.send(JSON.stringify
 
 function roomView(r) {
   return {
-    t: 'room', code: r.code, host: r.host, state: r.state, delay: r.delay,
+    t: 'room', code: r.code, host: r.host, state: r.state, delay: r.delay, mode: r.mode, cpus: r.cpus | 0,
     session: r.session ? { id: r.session.id, players: r.session.players } : null,
     members: r.members.map((id) => {
       const c = clients.get(id);
@@ -143,6 +180,9 @@ function leaveRoom(c) {
   if (!r) return;
   r.members = r.members.filter((id) => id !== c.id);
   r.seats.delete(c.id);
+  r.pending = (r.pending || []).filter((p) => p.id !== c.id);
+  if (r.session) r.session.inGame.delete(c.id);
+  if (r.snapFrom === c.id) { r.snapFrom = null; requestSnapshot(r); }
   if (r.session && r.session.players.includes(c.id)) {
     // Everyone keeps simulating: the leaver's controller is released after the
     // last frame the server relayed for them, the same cut-off for all peers.
@@ -152,6 +192,58 @@ function leaveRoom(c) {
   }
   if (!r.members.length) { rooms.delete(r.code); log(`salon ${r.code} fermé`); return; }
   if (r.host === c.id) r.host = r.members[0];
+  broadcastRoom(r);
+}
+
+// ------------------------------------------------------------------ late join
+// Ask one peer that runs the game (the host if possible) for a snapshot.
+function requestSnapshot(r) {
+  if (!r.session || r.snapFrom || !(r.pending || []).length) return;
+  const S = r.session;
+  const candidates = [r.host, ...S.players, ...S.inGame].filter((id) =>
+    id && S.inGame.has(id) && clients.get(id) && !(r.pending || []).some((p) => p.id === id));
+  const from = candidates[0];
+  if (!from) return;
+  r.snapFrom = from;
+  send(clients.get(from), { t: 'snapreq' });
+  log(`salon ${r.code} : instantané demandé à ${clients.get(from).name}`);
+}
+
+function onSnapshotBytes(c, data) {
+  const r = c.room ? rooms.get(c.room) : null;
+  if (!r || !r.session || r.snapFrom !== c.id || !c.snapMeta) return;
+  const f = c.snapMeta.f;
+  c.snapMeta = null;
+  r.snapFrom = null;
+  const S = r.session;
+  const joined = [];
+  for (const p of r.pending || []) {
+    if (!r.members.includes(p.id)) continue;
+    if (p.idx >= 0) {
+      const old = S.players[p.idx];
+      S.dropped.delete(old);
+      S.players[p.idx] = p.id;
+      S.names.set(p.id, clients.get(p.id)?.name);
+    }
+    S.inGame.add(p.id);
+    joined.push(clients.get(p.id)?.name || '?');
+  }
+  r.pending = [];
+  // A new schedule from the snapshot's frame (old inputs are void).
+  S.id = newId();
+  S.last = new Map();
+  for (const id of S.dropped.keys()) S.dropped.set(id, f - 1);
+  const hostIndex = Math.max(0, S.players.indexOf(r.host));
+  const dropped = [...S.dropped.keys()].map((id) => [S.players.indexOf(id), f - 1]).filter(([i]) => i >= 0);
+  const meta = JSON.stringify({
+    t: 'resync', session: S.id, f, players: S.players, delay: r.delay, hostIndex, dropped,
+    mode: r.mode, cpus: r.cpus | 0, aspect: S.aspect, host: r.host, joined: joined.join(', '),
+  });
+  for (const id of S.inGame) {
+    const o = clients.get(id);
+    if (o && o.ws.readyState === 1) { o.ws.send(meta); o.ws.send(data, { binary: true }); }
+  }
+  log(`salon ${r.code} : ${joined.join(', ')} rejoint la partie (instantané de l’image ${f}, ${data.length} octets)`);
   broadcastRoom(r);
 }
 
@@ -165,7 +257,7 @@ function onJson(c, m) {
     case 'create': {
       if (r) leaveRoom(c);
       const code = newRoomCode();
-      const nr = { code, host: c.id, members: [c.id], seats: new Map([[c.id, 0]]), state: 'lobby', delay: 5, session: null };
+      const nr = { code, host: c.id, members: [c.id], seats: new Map([[c.id, 0]]), state: 'lobby', delay: 5, session: null, mode: 'multi', cpus: 1 };
       rooms.set(code, nr);
       c.room = code;
       log(`salon ${code} créé par ${c.name}`);
@@ -179,10 +271,24 @@ function onJson(c, m) {
       if (nr.members.length >= MAX_ROOM) { send(c, { t: 'error', message: 'Salon complet.' }); return; }
       if (r) leaveRoom(c);
       nr.members.push(c.id);
-      // A seat while the game has not started; afterwards spectators wait for
-      // the next game (a running simulation cannot gain a peer mid-way yet).
-      nr.seats.set(c.id, nr.state === 'lobby' ? seatFree(nr) : -1);
       c.room = code;
+      if (nr.state === 'running' && nr.session) {
+        // Joining a running game: the place of a player who left (same name
+        // first), otherwise a spectator; either way the game is synchronised
+        // from a snapshot every peer reloads.
+        const S = nr.session;
+        let idx = -1;
+        for (const id of S.dropped.keys()) {
+          const i = S.players.indexOf(id);
+          if (i >= 0 && !(nr.pending || []).some((p) => p.idx === i) && (idx < 0 || S.names.get(id) === c.name)) idx = i;
+        }
+        nr.seats.set(c.id, idx);
+        (nr.pending ||= []).push({ id: c.id, idx });
+        broadcastRoom(nr);
+        requestSnapshot(nr);
+        return;
+      }
+      nr.seats.set(c.id, nr.state === 'lobby' ? seatFree(nr) : -1);
       broadcastRoom(nr);
       return;
     }
@@ -200,6 +306,20 @@ function onJson(c, m) {
       broadcastRoom(r);
       return;
     }
+    case 'mode':
+      if (!r || r.host !== c.id || r.state !== 'lobby') return;
+      r.mode = m.mode === 'solo' ? 'solo' : 'multi';
+      if (m.cpus !== undefined) r.cpus = Math.max(0, Math.min(3, m.cpus | 0));
+      broadcastRoom(r);
+      return;
+    case 'snap':
+      // The snapshot's bytes follow in a binary message from the same peer.
+      if (!r || !r.session || r.snapFrom !== c.id) return;
+      c.snapMeta = { f: m.f | 0 };
+      return;
+    case 'snapfail':
+      if (r && r.snapFrom === c.id) { r.snapFrom = null; setTimeout(() => requestSnapshot(r), 1000); }
+      return;
     case 'delay':
       if (!r || r.host !== c.id || r.state !== 'lobby') return;
       r.delay = Math.max(2, Math.min(20, m.delay | 0));
@@ -211,17 +331,23 @@ function onJson(c, m) {
       const players = [...r.seats.entries()].filter(([, s]) => s >= 0).sort((a, b) => a[1] - b[1]).map(([id]) => id);
       if (!players.length) return;
       const aspect = Math.max(4 / 3, Math.min(32 / 9, +m.aspect || 16 / 9));
-      r.session = { id: newId(), players, aspect, last: new Map(), dropped: new Map() };
+      r.session = {
+        id: newId(), players, aspect, last: new Map(), dropped: new Map(),
+        names: new Map(players.map((id) => [id, clients.get(id)?.name])),
+        inGame: new Set(r.members),
+      };
       r.state = 'running';
       log(`salon ${r.code} : partie lancée, ${players.length} joueur(s)`);
       broadcastRoom(r);
-      broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, delay: r.delay, aspect });
+      broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, aspect, mode: r.mode, cpus: r.cpus | 0 });
       return;
     }
     case 'end':
       if (!r || r.host !== c.id) return;
       r.state = 'lobby';
       r.session = null;
+      r.pending = [];
+      r.snapFrom = null;
       for (const id of r.members) if (!r.seats.has(id) || r.seats.get(id) < 0) r.seats.set(id, seatFree(r));
       broadcastRoom(r);
       broadcast(r, { t: 'ended' });
@@ -256,13 +382,13 @@ export function start({ port = PORT, host = HOST } = {}) {
   const server = tls
     ? https.createServer({ cert: fs.readFileSync(process.env.CDG_TLS_CERT), key: fs.readFileSync(process.env.CDG_TLS_KEY) }, handler)
     : http.createServer(handler);
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 1 << 20 });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 32 << 20 });
   wss.on('connection', (ws) => {
     const c = { id: newId(), ws, name: 'Cochon', room: null, alive: true, rtt: 0 };
     clients.set(c.id, c);
     ws.on('pong', () => { c.alive = true; });
     ws.on('message', (data, bin) => {
-      if (bin) return;
+      if (bin) { onSnapshotBytes(c, data); return; }
       let m;
       try { m = JSON.parse(data); } catch { return; }
       if (m && typeof m.t === 'string') onJson(c, m);

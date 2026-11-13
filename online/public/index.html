@@ -25,10 +25,13 @@
         </div>
         <div class="col">
           <h2>Rejoindre des amis</h2>
+          <label for="code" class="small">Code du salon (4 lettres, donné par l’hôte)</label>
           <div class="join">
-            <input id="code" maxlength="4" placeholder="CODE" aria-label="Code du salon" autocapitalize="characters">
+            <input id="code" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off">
             <button id="btn-join">Rejoindre</button>
           </div>
+          <h2 style="margin-top:14px">Salons ouverts</h2>
+          <ul id="room-list" class="room-list"></ul>
         </div>
       </div>
       <p id="preload" class="muted small"></p>
@@ -57,7 +60,18 @@
           <option value="3">Très nette — 3×</option>
           <option value="4">Maximale — 4× (PC puissant)</option>
         </select></label>
+      <p id="mode-line" class="small"></p>
       <div class="host-only">
+        <label>Mode de jeu
+          <select id="mode">
+            <option value="multi" selected>Multijoueur — bataille entre les joueurs du salon</option>
+            <option value="solo">Solo — campagne « Un joueur » (l’hôte joue, les autres regardent)</option>
+          </select></label>
+        <label id="cpus-label">Équipes de l’ordinateur (en plus des joueurs)
+          <select id="cpus">
+            <option value="0">Aucune</option><option value="1" selected>1</option>
+            <option value="2">2</option><option value="3">3</option>
+          </select></label>
         <label>Format d’image de la partie
           <select id="aspect">
             <option value="auto" selected>Celui de mon écran</option>
@@ -82,7 +96,7 @@
       <button id="btn-panel" class="pill" title="F1">☰ Salon</button>
     </div>
     <aside id="panel" hidden>
-      <h2>Salon</h2>
+      <div class="panel-head"><h2>Salon</h2><button id="btn-panel-close" title="Fermer (F1)">✕ Fermer</button></div>
       <p><button id="btn-copy">Copier le lien d’invitation</button></p>
       <ul id="members"></ul>
       <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>

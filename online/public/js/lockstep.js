@@ -17,15 +17,37 @@ export class Lockstep {
    * @param {string[]} o.players  participant ids in seat order
    * @param {string} o.me         this peer's id (may be a spectator)
    * @param {number} o.delay      input delay in frames
+   * @param {number} [o.start]    first frame (a snapshot's, after a join)
+   * @param {number} [o.host]     participant index driving the menus
    */
-  constructor({ players, me, delay }) {
+  constructor({ players, me, delay, start = 0, host = 0 }) {
     this.players = players.slice();
     this.me = this.players.indexOf(me);
     this.delay = Math.max(1, delay | 0);
+    this.start = start | 0;
+    this.host = host | 0;
     this.words = this.players.map(() => new Map());
     this.dropped = new Map();      // index -> last relayed frame
-    this.nextLocal = this.delay;   // next frame we owe the others
-    this.nextPublish = 0;          // next frame to hand to the game
+    this.nextLocal = this.start + this.delay;   // next frame we owe the others
+    this.nextPublish = this.start;               // next frame to hand to the game
+  }
+
+  gone(index, f) {
+    const d = this.dropped.get(index);
+    return d !== undefined && f > d;
+  }
+
+  /** Control word of frame f: bits 0-3 host index (first participant still
+   * there if the host left), bits 4-7 mask of participants who left. */
+  control(f) {
+    let mask = 0;
+    for (let i = 0; i < this.players.length; i++) if (this.gone(i, f)) mask |= 1 << i;
+    let host = this.host;
+    if (mask & (1 << host)) {
+      host = 0;
+      while (host < this.players.length - 1 && mask & (1 << host)) host++;
+    }
+    return (host & 15) | ((mask & 15) << 4);
   }
 
   get isPlayer() { return this.me >= 0; }
@@ -56,9 +78,8 @@ export class Lockstep {
   }
 
   wordFor(index, f) {
-    if (f < this.delay) return NEUTRAL;
-    const d = this.dropped.get(index);
-    if (d !== undefined && f > d) return NEUTRAL;
+    if (f < this.start + this.delay) return NEUTRAL;
+    if (this.gone(index, f)) return NEUTRAL;
     return this.words[index].get(f);
   }
 
