@@ -70,6 +70,7 @@ static int script_provider(uint32_t frame, uint16_t pads[2]) {
 
 #if defined(PSX_WEB)
 void psx_web_lockstep_enable(uint32_t nplayers);
+void psx_web_lockstep_set_host(uint32_t index);
 #endif
 
 void psx_lockstep_init_from_env(void) {
@@ -78,6 +79,8 @@ void psx_lockstep_init_from_env(void) {
     const char *web = getenv("PSX_WEB_LOCKSTEP");
     if (web && atoi(web) > 0) {
         fprintf(stderr, "psxrecomp: web lockstep, %d participant(s)\n", atoi(web));
+        const char *host = getenv("PSX_WEB_LOCKSTEP_HOST");
+        psx_web_lockstep_set_host(host ? (uint32_t)atoi(host) : 0u);
         psx_web_lockstep_enable((uint32_t)atoi(web));
         return;
     }

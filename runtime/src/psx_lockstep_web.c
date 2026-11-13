@@ -26,25 +26,17 @@ static volatile uint32_t s_status[8];
 #define s_last_digest s_status[2]
 #define s_wait_ms_total s_status[3]
 
-/* Default: one shared controller (hot-seat games). The participant in
- * control keeps it while active; after HANDOFF idle frames the next one to
- * press a button takes it. A pure function of the input stream, so every peer
- * agrees on the holder at every frame. */
-#define HANDOFF 100u
-static int s_holder = -1;
-static uint32_t s_holder_last;
+/* Default: the host drives the controller (menus, team setup, anything the
+ * title does not assign to a participant). A pure function of the frame's
+ * inputs, so every peer agrees. */
+static uint32_t s_host;
 void psx_lockstep_default_select(uint32_t frame, const uint16_t *words, uint32_t n,
                                  uint16_t pads[2]) {
-    if (s_holder >= 0 && (uint32_t)s_holder < n && words[s_holder] != 0xFFFFu)
-        s_holder_last = frame;
-    if (s_holder < 0 || frame - s_holder_last >= HANDOFF) {
-        for (uint32_t p = 0; p < n; p++) {
-            if (words[p] != 0xFFFFu) { s_holder = (int)p; s_holder_last = frame; break; }
-        }
-    }
-    pads[0] = (s_holder >= 0 && (uint32_t)s_holder < n) ? words[s_holder] : 0xFFFFu;
+    (void)frame;
+    const uint32_t h = s_host < n ? s_host : 0u;
+    pads[0] = n ? words[h] : 0xFFFFu;
     pads[1] = 0xFFFFu;
-    s_status[4] = (uint32_t)(s_holder + 1);
+    s_status[4] = n ? h + 1u : 0u;
     s_status[5] = 0;
 }
 
@@ -93,6 +85,7 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
     return 1;
 }
 
+EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_set_host(uint32_t index) { s_host = index; }
 EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_enable(uint32_t nplayers) {
     /* No ring reset: the page's lockstep worker may already have published
      * the first frames (the ring starts zeroed with the module). */
