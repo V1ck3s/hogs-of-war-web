@@ -131,6 +131,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const loadFrom = opt('load-state', null);
   const saveTo = opt('save-state', null);
   const ramEvery = +opt('ram-every', 0);
+  const wavFile = opt('wav', null);
+  const wavFrom = +opt('wav-from', 0);
+  const wavChunks = [];
   const script = scriptFile ? JSON.parse(fs.readFileSync(scriptFile, 'utf8')) : [];
   fs.mkdirSync(out, { recursive: true });
   const core = await createCore({ discPath: disc, verbose: !!opt('verbose', '') });
@@ -145,7 +148,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     masks.forEach((m, p) => core.setInput(p, m));
     core.runFrame();
-    audioSamples += core.audio().length / 2;
+    const au = core.audio();
+    audioSamples += au.length / 2;
+    if (wavFile && f >= wavFrom) wavChunks.push(au);
     if (ramEvery && (f + 1) % ramEvery === 0) fs.writeFileSync(path.join(out, `ram${String(f + 1).padStart(6, '0')}.bin`), core.ram());
     if ((f + 1) % every === 0) {
       const fr = core.frame();
@@ -155,4 +160,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const dt = (Date.now() - t0) / 1000;
   console.log(`${frames} frames in ${dt.toFixed(1)}s (${(frames / dt).toFixed(1)} fps), audio frames ${audioSamples}, ramhash ${core.ramHash().toString(16)}`);
   if (saveTo) fs.writeFileSync(saveTo, core.saveState());
+  if (wavFile) {
+    const n = wavChunks.reduce((a, c) => a + c.length, 0);
+    const h = Buffer.alloc(44);
+    h.write('RIFF', 0); h.writeUInt32LE(36 + n * 2, 4); h.write('WAVEfmt ', 8);
+    h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(2, 22);
+    h.writeUInt32LE(44100, 24); h.writeUInt32LE(44100 * 4, 28); h.writeUInt16LE(4, 32); h.writeUInt16LE(16, 34);
+    h.write('data', 36); h.writeUInt32LE(n * 2, 40);
+    fs.writeFileSync(wavFile, Buffer.concat([h, ...wavChunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.length * 2))]));
+  }
 }

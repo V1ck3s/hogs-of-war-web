@@ -119,6 +119,17 @@ node tests/sync-sweep.mjs "../disc-fr/<jeu>.cue" 1 # fidélité des états de sy
 node tests/netplay-sim.mjs "../disc-fr/<jeu>.cue" [état] # lockstep simulé, latence aléatoire
 node tests/e2e.mjs ../disc-fr                     # Chromium : solo + partie en réseau à 2
 node tools/headless.mjs "<jeu>.cue" --frames 3000 --shot-every 100 --out captures
+node tools/headless.mjs "<jeu>.cue" --frames 4200 --out captures --wav intro.wav --wav-from 1400  # audio
+```
+
+Vérification des voix : l'audio de la cinématique d'introduction enregistré
+ainsi (puis converti en 16 kHz mono) a été transcrit avec whisper.cpp
+(modèle `small`) : langue détectée **français (p = 0,98)**, par exemple
+« La truffe, c'est la force du porc qui contrôle la truffe, contrôle le
+monde ! ». En bataille : « Tiens ! Mouille le maillot ! ».
+
+```bash
+# (fin des exemples)
 ```
 
 ## Architecture
