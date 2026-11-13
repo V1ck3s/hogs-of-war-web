@@ -31,6 +31,11 @@ uint32_t psx_lockstep_ram_digest(void);
 typedef void (*psx_lockstep_select_fn)(uint32_t frame, const uint16_t *words,
                                        uint32_t nplayers, uint16_t pads[2]);
 void psx_lockstep_set_select(psx_lockstep_select_fn fn);
+/* The default selection (one shared controller, idle handoff). */
+void psx_lockstep_default_select(uint32_t frame, const uint16_t *words,
+                                 uint32_t nplayers, uint16_t pads[2]);
+/* Status for the page: participant driving the game, turn's team number. */
+void psx_lockstep_set_owner(int participant, uint32_t team);
 
 #ifdef __cplusplus
 }

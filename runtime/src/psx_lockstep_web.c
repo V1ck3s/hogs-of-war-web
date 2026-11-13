@@ -33,8 +33,8 @@ static volatile uint32_t s_status[8];
 #define HANDOFF 100u
 static int s_holder = -1;
 static uint32_t s_holder_last;
-static void default_select(uint32_t frame, const uint16_t *words, uint32_t n,
-                           uint16_t pads[2]) {
+void psx_lockstep_default_select(uint32_t frame, const uint16_t *words, uint32_t n,
+                                 uint16_t pads[2]) {
     if (s_holder >= 0 && (uint32_t)s_holder < n && words[s_holder] != 0xFFFFu)
         s_holder_last = frame;
     if (s_holder < 0 || frame - s_holder_last >= HANDOFF) {
@@ -45,12 +45,20 @@ static void default_select(uint32_t frame, const uint16_t *words, uint32_t n,
     pads[0] = (s_holder >= 0 && (uint32_t)s_holder < n) ? words[s_holder] : 0xFFFFu;
     pads[1] = 0xFFFFu;
     s_status[4] = (uint32_t)(s_holder + 1);
+    s_status[5] = 0;
 }
 
 /* Game-specific selection hook (installed by a title plugin); default: the
  * first participant drives pad 0, the second pad 1. */
 static psx_lockstep_select_fn s_select;
 void psx_lockstep_set_select(psx_lockstep_select_fn fn) { s_select = fn; }
+
+/* Shown by the page: who drives the game now (participant index, -1 none)
+ * and, for turn-based titles, the turn's team number (0 = no turn). */
+void psx_lockstep_set_owner(int participant, uint32_t team) {
+    s_status[4] = (uint32_t)(participant + 1);
+    s_status[5] = team;
+}
 
 static int web_provider(uint32_t frame, uint16_t pads[2]) {
     const uint32_t i = frame % RING;
@@ -68,7 +76,7 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
     if (s_select) {
         s_select(frame, words, n, pads);
     } else {
-        default_select(frame, words, n, pads);
+        psx_lockstep_default_select(frame, words, n, pads);
     }
     s_cur_frame = frame;
     if (frame % 120u == 0u) {
