@@ -34,6 +34,16 @@ function gameFrame(port) {
   });
 }
 
+let serverLog = '';
+srv.stdout.on('data', (d) => { serverLog += d; });
+async function displayOf(code) {
+  for (let i = 0; i < 100; i++) {
+    const m = serverLog.match(new RegExp(`salon ${code} : jeu lancé \\(:(\\d+)`));
+    if (m) return m[1];
+    await sleep(200);
+  }
+  throw new Error('display inconnu');
+}
 const host = await browser.newPage();
 await host.setViewport({ width: 1680, height: 720 }); // 21:9 screen
 await host.goto(`http://localhost:${PORT}/`);
@@ -42,7 +52,8 @@ await host.evaluate(() => { window.__cdgRecord = true; });
 await host.click('#btn-create');
 await host.waitForFunction(() => window.__cdg.room?.state === 'running', { timeout: 180000 });
 const code = await host.evaluate(() => window.__cdg.room.code);
-const port = 4500; // first instance: display :100 → control port 4400 + 100
+// Control port of this room's game (display :N → port 4400 + N), from the server log.
+const port = 4400 + +(await displayOf(code));
 const guest = await browser.newPage();
 await guest.setViewport({ width: 1280, height: 800 }); // 16:10 laptop
 await guest.goto(`http://localhost:${PORT}/#salon=${code}`);
@@ -52,14 +63,14 @@ await host.bringToFront();
 
 const tap = async (key) => { await host.keyboard.down(key); await sleep(120); await host.keyboard.up(key); };
 // Boot → main menu (Start), MULTIJOUEUR (Down, Cross), then confirm defaults.
-// Start skips the intro/title and is harmless once in the main menu.
-const script = [];
-for (let f = 600; f <= 2600; f += 150) script.push([f, 'Enter']);
-script.push([2750, 'ArrowDown'], [2850, 'KeyX']);
-for (let i = 0; i < 40; i++) script.push([2950 + i * 85, 'KeyX']);
-const END = 2950 + 40 * 85 + 3000;
+// Start skips the intro and the title (3 presses reach the main menu at
+// ~frame 1050); one more Start in the main menu would pick UN JOUEUR.
+const script = [[600, 'Enter'], [800, 'Enter'], [1000, 'Enter']];
+script.push([1350, 'ArrowDown'], [1450, 'KeyX']);
+for (let i = 0; i < 40; i++) script.push([1550 + i * 85, 'KeyX']);
+const END = 1550 + 40 * 85 + 3000;
 // During the battle: the guest takes the shared controller (host idle).
-const GUEST_AT = 2950 + 40 * 85 + 1500;
+const GUEST_AT = 1550 + 40 * 85 + 1500;
 let next = 0, shot = 0, guestDone = false;
 for (;;) {
   const f = await gameFrame(port);

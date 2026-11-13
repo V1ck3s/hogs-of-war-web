@@ -42,7 +42,7 @@ game nor an install, play with the keyboard at any resolution and any aspect
 ratio (4:3 to 21:9 rendered natively), and play together remotely on the
 shared controller (the game is turn-based).
 
-## Web version — Cochons de Guerre (French, browser emulation)
+## Earlier web version — browser emulation (superseded by `stream/`)
 
 [`web/`](web/README.md) contains a browser port of the **French PlayStation
 release** (*Cochons de Guerre*, SLES-02766): the original PS1 game code runs in

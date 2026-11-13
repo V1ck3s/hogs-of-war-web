@@ -95,6 +95,7 @@ proxy HTTPS (Caddy, nginx) qui transmet `/ws` en WebSocket.
 | `CDG_MAX_ROOMS` | 1 | parties simultanées (une partie ≈ 1 cœur CPU + ~800 Mo) |
 | `CDG_AUTOCOMPILE` | `../cochons/autocompile.sh` | compilation native en arrière-plan |
 | `LIBGL_ALWAYS_SOFTWARE` | 1 | 0 pour utiliser le GPU du serveur |
+| `CDG_SSAA` | auto | résolution interne ×1..×4 (auto : selon la qualité avec GPU, ×1 en rendu logiciel) |
 | `CDG_RENDERER` | `opengl` | `software` : moteur de rendu PS1 logiciel du runtime (serveur sans GPU) |
 | `CDG_OVERCLOCK` | 200 | vitesse du CPU émulé en % (100 = d'origine) ; à 200 % les attentes actives sont court-circuitées |
 | `CDG_60HZ` | 1 | mode 60 Hz de Frontschweine (batailles à 30 i/s au lieu de 25) ; 0 = 50 Hz PAL d'origine |
@@ -113,6 +114,7 @@ visite de chaque partie du jeu alimente le cache de compilation native
 ```bash
 npm test                       # analyseurs H.264/Ogg, arbitre de la manette
 node tests/e2e.mjs             # Chromium : salon, vidéo + son décodés, clavier → jeu, 2 joueurs
+node tests/playthrough.mjs out # partie complète au clavier via le flux (21:9), l'invité joue en bataille
 ```
 
 ## Mentions légales

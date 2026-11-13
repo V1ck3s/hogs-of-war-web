@@ -54,6 +54,7 @@ const server = TLS ? https.createServer(TLS, handler) : http.createServer(handle
 
 // ------------------------------------------------------------------ rooms
 const rooms = new Map();
+const closing = new Set(); // rooms whose game is still shutting down
 const clients = new Map();
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -182,7 +183,7 @@ function leaveRoom(c) {
   if (!room.members.length) {
     log(`salon ${room.code} fermé`);
     rooms.delete(room.code);
-    if (room.game) room.game.stop();
+    if (room.game) { closing.add(room); room.game.stop().finally(() => closing.delete(room)); }
     return;
   }
   if (room.host === c.id) room.host = room.members[0];
@@ -264,7 +265,7 @@ setInterval(() => {
 }, 15000).unref();
 
 async function shutdown() {
-  for (const r of rooms.values()) if (r.game) await r.game.stop();
+  await Promise.all([...rooms.values(), ...closing].map((r) => r.game && r.game.stop()));
   process.exit(0);
 }
 process.on('SIGINT', shutdown);

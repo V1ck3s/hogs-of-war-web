@@ -14,7 +14,11 @@ const PORT = 18100 + Math.floor(Math.random() * 500);
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], {
   env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', CDG_MAX_ROOMS: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
-srv.stdout.on('data', (d) => process.stdout.write('[serveur] ' + d));
+srv.stdout.on('data', (d) => {
+  process.stdout.write('[serveur] ' + d);
+  const m = String(d).match(/jeu lancé \(:(\d+)/);
+  if (m) ctlPort = 4400 + +m[1];
+});
 srv.stderr.on('data', (d) => process.stdout.write('[serveur] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const URL = `http://localhost:${PORT}/`;
@@ -29,9 +33,10 @@ const state = (p) => p.evaluate(() => ({ room: window.__cdg.room, id: window.__c
   video: window.__cdg.stats.videoTotal, audio: window.__cdg.stats.audioFrames }));
 // Read-only look at the game's controller port through the runtime's local
 // control server (first instance = display :100 → port 4500).
+let ctlPort = 4500;
 const padStatus = () => new Promise((resolve) => {
   let buf = '';
-  const sock = net.connect(4500, '127.0.0.1', () => sock.write('{"id":1,"cmd":"pad_status"}\n'));
+  const sock = net.connect(ctlPort, '127.0.0.1', () => sock.write('{"id":1,"cmd":"pad_status"}\n'));
   sock.on('data', (d) => { buf += d; if (buf.includes('\n')) { sock.destroy(); try { resolve(JSON.parse(buf)); } catch { resolve(null); } } });
   sock.on('error', () => resolve(null));
 });

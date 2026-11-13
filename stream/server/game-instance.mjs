@@ -18,12 +18,31 @@ const run = (cmd, args, env) => new Promise((resolve) => {
 });
 
 export const QUALITY = {
-  '480p': { h: 480, kbps: 1500, scale: 1 },
-  '720p': { h: 720, kbps: 3000, scale: 2 },
-  '1080p': { h: 1080, kbps: 6000, scale: 3 },
+  '480p': { h: 480, kbps: 2500, scale: 1 },
+  '720p': { h: 720, kbps: 5000, scale: 2 },
+  '1080p': { h: 1080, kbps: 9000, scale: 3 },
 };
 
 let displayCounter = 0;
+const live = new Set(); // every child process of every instance
+
+// Never leave a game, Xvfb or encoder behind if the server goes away.
+process.on('exit', () => { for (const p of live) { try { p.kill('SIGKILL'); } catch { /* gone */ } } });
+
+function track(p) {
+  live.add(p);
+  p.on('exit', () => live.delete(p));
+  return p;
+}
+
+// First display number with no X server lock and no listener on its port.
+function freeDisplay() {
+  for (let i = 0; i < 100; i++) {
+    const n = 100 + (displayCounter++ % 100);
+    if (!fs.existsSync(`/tmp/.X${n}-lock`) && !fs.existsSync(`/tmp/.X11-unix/X${n}`)) return n;
+  }
+  throw new Error('aucun écran virtuel libre');
+}
 
 export class GameInstance extends EventEmitter {
   /**
@@ -41,7 +60,7 @@ export class GameInstance extends EventEmitter {
     this.aspect = aspect;
     this.fps = fps;
     this.log = log;
-    this.n = 100 + (displayCounter++ % 100);
+    this.n = freeDisplay();
     this.display = `:${this.n}`;
     this.debugPort = 4400 + this.n;
     this.sink = `cdg_${this.n}`;
@@ -73,10 +92,8 @@ export class GameInstance extends EventEmitter {
   }
 
   async startXvfb() {
-    const lock = `/tmp/.X${this.n}-lock`;
-    if (fs.existsSync(lock)) { try { fs.unlinkSync(lock); } catch { /* in use */ } }
     // Large enough for 1080p ultrawide; we capture only the game window.
-    this.procs.xvfb = spawn('Xvfb', [this.display, '-screen', '0', '2560x1080x24', '-nolisten', 'tcp', '-noreset'], { stdio: 'ignore' });
+    this.procs.xvfb = track(spawn('Xvfb', [this.display, '-screen', '0', '2560x1080x24', '-nolisten', 'tcp', '-noreset'], { stdio: 'ignore' }));
     for (let i = 0; i < 50; i++) {
       if (fs.existsSync(`/tmp/.X11-unix/X${this.n}`)) return;
       await sleep(100);
@@ -113,6 +130,16 @@ export class GameInstance extends EventEmitter {
     ].join('\n'));
   }
 
+  // Internal resolution factor. With a GPU, follow the quality preset (×2 for
+  // 720p, ×3 for 1080p). With software OpenGL (llvmpipe) supersampling
+  // multiplies the fill cost, so render at ×1 and let the present pass scale
+  // the picture to the window size. CDG_SSAA forces a value (1..4).
+  ssaa() {
+    if (process.env.CDG_SSAA) return Math.max(1, Math.min(4, +process.env.CDG_SSAA | 0));
+    const softwareGl = (process.env.LIBGL_ALWAYS_SOFTWARE ?? '1') !== '0';
+    return softwareGl ? 1 : QUALITY[this.quality].scale;
+  }
+
   writeSettings() {
     const { w, h } = this.size();
     const q = QUALITY[this.quality];
@@ -124,7 +151,7 @@ export class GameInstance extends EventEmitter {
       `renderer = "${process.env.CDG_RENDERER || 'opengl'}"`,
       `aspect_ratio = "${reduce(num, den)}"`,
       'adaptive_view = true',
-      `supersampling = ${q.scale}`,
+      `supersampling = ${this.ssaa()}`,
       'fullscreen = false',
       'vsync = false',
       '',
@@ -163,7 +190,7 @@ export class GameInstance extends EventEmitter {
     const exe = path.join(this.workDir, this.binary);
     const args = ['--debug-port', String(this.debugPort)];
     if (process.env.CDG_GAME_ARGS) args.push(...process.env.CDG_GAME_ARGS.split(' '));
-    this.procs.game = spawn(exe, args, { cwd: this.workDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    this.procs.game = track(spawn(exe, args, { cwd: this.workDir, env, stdio: ['ignore', 'pipe', 'pipe'] }));
     const logFile = fs.createWriteStream(path.join(this.workDir, 'game.log'));
     this.procs.game.stdout.pipe(logFile);
     this.procs.game.stderr.pipe(logFile);
@@ -267,7 +294,7 @@ export class GameInstance extends EventEmitter {
       '-x264-params', 'aud=1:repeat-headers=1:sliced-threads=1',
       '-f', 'h264', 'pipe:1',
     ];
-    const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = track(spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] }));
     this.procs.video = p;
     this.videoConfig = { codec: 'avc1.64002a', width: w, height: h, fps: this.fps };
     this.emit('videoConfig', this.videoConfig);
@@ -290,7 +317,7 @@ export class GameInstance extends EventEmitter {
       '-flush_packets', '1', '-page_duration', '20000',
       '-f', 'ogg', 'pipe:1',
     ];
-    const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = track(spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] }));
     this.procs.audio = p;
     const ogg = new OggOpusParser((pkt) => this.emit('audio', pkt));
     p.stdout.on('data', (d) => ogg.push(d));
@@ -317,13 +344,12 @@ export class GameInstance extends EventEmitter {
 
   async stop() {
     this.stopped = true;
-    for (const k of ['video', 'audio', 'game', 'xvfb']) {
-      const p = this.procs[k];
-      if (p && p.exitCode === null) {
-        p.kill('SIGTERM');
-        setTimeout(() => { if (p.exitCode === null) p.kill('SIGKILL'); }, 3000).unref();
-      }
-    }
+    const procs = ['video', 'audio', 'game', 'xvfb'].map((k) => this.procs[k]).filter((p) => p && p.exitCode === null);
+    await Promise.all(procs.map((p) => new Promise((resolve) => {
+      const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch { /* gone */ } }, 2000);
+      p.once('exit', () => { clearTimeout(t); resolve(); });
+      try { p.kill('SIGTERM'); } catch { resolve(); }
+    })));
     if (this.sinkModule) await run('pactl', ['unload-module', this.sinkModule]);
   }
 }
