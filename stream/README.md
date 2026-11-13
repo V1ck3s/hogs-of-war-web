@@ -101,16 +101,48 @@ proxy HTTPS (Caddy, nginx) qui transmet `/ws` en WebSocket.
 | `CDG_OVERCLOCK` | 200 | vitesse du CPU émulé en % (100 = d'origine) ; à 200 % les attentes actives sont court-circuitées |
 | `CDG_60HZ` | 1 | mode 60 Hz de Frontschweine (batailles à 30 i/s au lieu de 25) ; 0 = 50 Hz PAL d'origine |
 
-Performances : le jeu doit tenir le temps réel côté serveur pour une lecture
-fluide. S'il prend du retard, le son reste complet (lu à la source, sans
-silence inséré) et le lecteur du navigateur agrandit son tampon (60 ms → 1,5 s)
-pour limiter les coupures. Mesures sur la machine de développement (CPU virtuel QEMU
-générique à 1,8 GHz, sans GPU, ~3 à 4 fois plus lent qu'un processeur de
-bureau récent) : cinématique 37 i/s sur 60, bataille ~15 i/s. Le profil montre
-~45 % du temps dans le rendu OpenGL logiciel (llvmpipe) : un serveur avec GPU
-(`LIBGL_ALWAYS_SOFTWARE=0`) ou un CPU moderne suffit pour 60 i/s. La première
-visite de chaque partie du jeu alimente le cache de compilation native
-(`cochons/build/cache`) ; les visites suivantes sont plus rapides.
+### Mode production (temps réel)
+
+Pour la mise en ligne, compilez le jeu **sans outils de debug et avec PGO**
+(optimisation guidée par profil) : le serveur pilote alors la manette 1 par
+des événements clavier XTest dans l'écran virtuel (aucun port de contrôle) et
+capte le son par PulseAudio.
+
+```bash
+cd cochons
+CC=clang CXX=clang++ cmake -S . -B build-prod -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DPSX_DEBUG_TOOLS=OFF -DPSX_PGO=generate -DPSX_REWIND=OFF -DPSX_ENABLE_VULKAN=OFF -DPSXRECOMP_REQUIRE_GAME_C=ON
+ninja -C build-prod psx-runtime
+ln -s ../disc build-prod/disc; ln -s ../build/extracted build-prod/extracted; ln -s ../build/cache build-prod/cache
+# entraînement : lancer le jeu (intro, menus, une bataille) puis le quitter (Ctrl+C), LLVM_PROFILE_FILE=pgo/xxx.profraw
+llvm-profdata merge -o build-prod/pgo/default.profdata build-prod/pgo/*.profraw
+cmake -S . -B build-prod -DPSX_PGO=use && ninja -C build-prod psx-runtime
+cc -O2 ../stream/native/xkeys.c -o ../stream/native/xkeys -lX11 -lXtst
+
+# serveur
+CDG_GAME_DIR=../cochons/build-prod CDG_RENDERER=software CDG_60HZ=0 CDG_OVERCLOCK=100 \
+CDG_GAME_CPUS=0,1,2 CDG_AUX_CPUS=3 npm start
+```
+
+Mesures sur la machine de développement (processeur virtuel générique à
+1,8 GHz, 4 cœurs, sans GPU), cadence du jeu côté serveur pendant une session
+de streaming avec deux joueurs distants (`tests/realtime-remote.mjs`, qualité
+« Native PS1 » 480×270) :
+
+| Phase | Cadence (50 Hz visés) |
+|---|---|
+| Cinématique d'introduction, film d'entraînement | 49,8 – 50,1 Hz |
+| Écran titre, bataille (mode démo) | 49,9 – 50,1 Hz |
+| Menu principal (touches pressées) | 47,9 – 50,0 Hz |
+| **Moyenne sur 195 s** | **49,92 Hz** |
+
+Vidéo reçue 49,9 img/s, son reçu 179,8 s pour 180 s. Sans ces optimisations
+(build de debug, OpenGL logiciel) la même machine plafonnait à ~15 Hz en
+bataille. Avec un GPU (`LIBGL_ALWAYS_SOFTWARE=0`, `CDG_RENDERER=opengl`) les
+qualités 720p/1080p rendent la scène en résolution interne ×2/×3.
+
+Les tests `e2e.mjs` et `playthrough.mjs` utilisent le build de debug
+(`cochons/build`) pour lire l'état réel de la manette dans le jeu.
 
 ## Tests
 

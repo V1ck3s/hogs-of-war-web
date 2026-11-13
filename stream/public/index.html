@@ -21,6 +21,8 @@
           <h2>Nouvelle partie</h2>
           <label>Qualité d’image
             <select id="lobby-quality">
+              <option value="270p">Native PS1 (serveur modeste, agrandi par le navigateur)</option>
+              <option value="360p">360p (serveur sans GPU, agrandi par le navigateur)</option>
               <option value="480p">480p (connexion modeste)</option>
               <option value="720p" selected>720p</option>
               <option value="1080p">1080p</option>
@@ -65,7 +67,7 @@
         garde la main, et après 2 secondes sans action le prochain joueur qui appuie la prend.
         Dans le jeu : <b>MULTIJOUEUR</b>, un emplacement <b>JOUEUR</b> par participant.</p>
       <div class="host-only">
-        <label>Qualité <select id="quality"><option>480p</option><option>720p</option><option>1080p</option></select></label>
+        <label>Qualité <select id="quality"><option>270p</option><option>360p</option><option>480p</option><option>720p</option><option>1080p</option></select></label>
         <label class="check"><input id="turbo" type="checkbox"> Accélérer (tours de l’IA)</label>
       </div>
       <label class="check"><input id="spectate" type="checkbox"> Regarder seulement</label>

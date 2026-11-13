@@ -162,6 +162,7 @@ async function initAudio() {
     await S.actx.audioWorklet.addModule('js/audio-worklet.js');
     S.anode = new AudioWorkletNode(S.actx, 'stream-audio', { outputChannelCount: [2] });
     S.anode.connect(S.actx.destination);
+    S.anode.port.onmessage = (e) => { if (e.data && e.data.underrun) S.stats.underruns = (S.stats.underruns || 0) + 1; };
     S.anode.port.postMessage({ volume: +($('#volume').value || 0.8) });
     if (!('AudioDecoder' in window)) { toast('Son indisponible : AudioDecoder non pris en charge par ce navigateur.'); return; }
     S.adec = new AudioDecoder({

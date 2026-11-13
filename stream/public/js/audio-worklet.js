@@ -42,6 +42,7 @@ class StreamAudio extends AudioWorkletProcessor {
       } else {
         L[i] = R[i] = 0;
         if (this.started) { // underrun: rebuild a larger cushion
+          this.port.postMessage({ underrun: 1 });
           this.target = Math.min(this.maxTarget, this.target * 2);
           this.steady = 0;
         }

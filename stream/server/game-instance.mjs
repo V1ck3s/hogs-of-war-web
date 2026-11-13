@@ -18,10 +18,30 @@ const run = (cmd, args, env) => new Promise((resolve) => {
 });
 
 export const QUALITY = {
+  // 360p: for servers without a GPU — the PS1 picture is ~320x240, the
+  // browser upscales it; a larger window only costs software presentation.
+  '270p': { h: 270, kbps: 1500, scale: 1 },   // native PS1 detail (240 lines), browser upscales
+  '360p': { h: 360, kbps: 2000, scale: 1 },
   '480p': { h: 480, kbps: 2500, scale: 1 },
   '720p': { h: 720, kbps: 5000, scale: 2 },
   '1080p': { h: 1080, kbps: 9000, scale: 3 },
 };
+
+// PS1 pad bit -> X keysym of the runtime's default keyboard binds
+// (psxrecomp runtime/src/psx_keybinds.c).
+const KEYSYMS = ['Shift_R', 't', 'y', 'Return', 'Up', 'Right', 'Down', 'Left',
+  'e', 'r', 'q', 'w', 'a', 's', 'x', 'z'];
+
+// The game has priority over the encoders: when the host CPU is short, the
+// encoders drop frames instead of slowing the game (and its sound) down.
+const ENCODER_NICE = +(process.env.CDG_ENCODER_NICE ?? 5);
+// Optional CPU pinning (taskset lists, e.g. "0,1" / "2,3"): dedicate cores to
+// the game so encoders, the virtual X server and other rooms never preempt it.
+const GAME_CPUS = process.env.CDG_GAME_CPUS || '';
+const AUX_CPUS = process.env.CDG_AUX_CPUS || '';
+function pinned(cpus, cmd, args) {
+  return cpus ? ['taskset', ['-c', cpus, cmd, ...args]] : [cmd, args];
+}
 
 let displayCounter = 0;
 const live = new Set(); // every child process of every instance
@@ -85,12 +105,17 @@ export class GameInstance extends EventEmitter {
     // port — every sample the game produces, in order, with no silence
     // inserted when the server falls behind real time. 'pulse': capture the
     // game's sound card output (needs PulseAudio).
-    this.audioSource = process.env.CDG_AUDIO_SOURCE === 'pulse' ? 'pulse' : 'spu';
     await this.startXvfb();
-    if (this.audioSource === 'pulse') await this.startAudioSink();
+    await this.startAudioSink();
     await this.startGame();
-    await this.connectDebug();
     await this.placeWindow();
+    // Debug build: drive controller 1 and read the SPU output through the
+    // runtime's control port. Production build (no control port, faster):
+    // XTest key presses on the runtime's default binds, sound from PulseAudio.
+    this.control = await this.probeControl();
+    this.audioSource = process.env.CDG_AUDIO_SOURCE || (this.control ? 'spu' : 'pulse');
+    if (this.control) this.sendPad(0xffff); else this.startXkeys();
+    this.log(`entrées : ${this.control ? 'port de contrôle' : 'XTest'} ; son : ${this.audioSource}`);
     this.startVideo();
     this.startAudio();
     this.emit('ready');
@@ -98,7 +123,8 @@ export class GameInstance extends EventEmitter {
 
   async startXvfb() {
     // Large enough for 1080p ultrawide; we capture only the game window.
-    this.procs.xvfb = track(spawn('Xvfb', [this.display, '-screen', '0', '2560x1080x24', '-nolisten', 'tcp', '-noreset'], { stdio: 'ignore' }));
+    // The X server is on the game's presentation path: it shares the game cores.
+    this.procs.xvfb = track(spawn(...pinned(GAME_CPUS, 'Xvfb', [this.display, '-screen', '0', '2560x1080x24', '-nolisten', 'tcp', '-noreset']), { stdio: 'ignore' }));
     for (let i = 0; i < 50; i++) {
       if (fs.existsSync(`/tmp/.X11-unix/X${this.n}`)) return;
       await sleep(100);
@@ -129,7 +155,9 @@ export class GameInstance extends EventEmitter {
       '[[package]]', 'id = "psx.enhancement.cpu-overclock"', '',
       '[[package]]', 'id = "frontschweine.enhancement.ntsc-60hz"', '',
       '[[feature]]', 'package_id = "psx.enhancement.cpu-overclock"', 'id = "cpu-overclock"',
-      `enabled = ${oc > 100}`, '[feature.values]', `percent = "${oc}"`, '',
+      // kept enabled even at 100 %: the feature also carries the busy-wait
+      // shortcuts (v_wait, FMV StGetNext polling) that save host CPU.
+      'enabled = true', '[feature.values]', `percent = "${oc}"`, '',
       '[[feature]]', 'package_id = "frontschweine.enhancement.ntsc-60hz"', 'id = "ntsc-60hz"',
       `enabled = ${hz60}`, '',
     ].join('\n'));
@@ -181,7 +209,7 @@ export class GameInstance extends EventEmitter {
     const env = {
       ...process.env,
       DISPLAY: this.display,
-      SDL_AUDIO_DRIVER: this.audioSource === 'pulse' ? 'pulseaudio' : 'dummy',
+      SDL_AUDIO_DRIVER: 'pulseaudio',
       PULSE_SINK: this.sink,
       PSX_NO_LAUNCHER: '1',
       PSX_VSYNC: '0',
@@ -195,7 +223,7 @@ export class GameInstance extends EventEmitter {
     const exe = path.join(this.workDir, this.binary);
     const args = ['--debug-port', String(this.debugPort)];
     if (process.env.CDG_GAME_ARGS) args.push(...process.env.CDG_GAME_ARGS.split(' '));
-    this.procs.game = track(spawn(exe, args, { cwd: this.workDir, env, stdio: ['ignore', 'pipe', 'pipe'] }));
+    this.procs.game = track(spawn(...pinned(GAME_CPUS, exe, args), { cwd: this.workDir, env, stdio: ['ignore', 'pipe', 'pipe'] }));
     const logFile = fs.createWriteStream(path.join(this.workDir, 'game.log'));
     this.procs.game.stdout.pipe(logFile);
     this.procs.game.stderr.pipe(logFile);
@@ -210,13 +238,21 @@ export class GameInstance extends EventEmitter {
   // quick tap = press then release, each held for at least one game frame);
   // only identical consecutive states are merged, and the queue is capped so
   // a stalled game never accumulates seconds of stale input.
-  async connectDebug() {
-    for (let i = 0; i < 200 && !this.stopped; i++) {
+  async probeControl() {
+    for (let i = 0; i < 12 && !this.stopped; i++) {
       const r = await this.request({ cmd: 'ping' });
-      if (r && r.ok) { this.queue = []; this.sendPad(0xffff); return; }
+      if (r && r.ok) { this.queue = []; return true; }
       await sleep(250);
     }
-    throw new Error('le jeu ne répond pas sur son port de contrôle');
+    return false;
+  }
+
+  startXkeys() {
+    const bin = process.env.CDG_XKEYS || path.resolve(path.dirname(new URL(import.meta.url).pathname), '../native/xkeys');
+    this.xkeys = track(spawn(bin, [], { env: { ...process.env, DISPLAY: this.display }, stdio: ['pipe', 'ignore', 'pipe'] }));
+    this.xkeys.stdin.on('error', () => {});
+    this.xkeys.stdin.write(`f ${this.window}\n`);
+    this.keysDown = 0;
   }
 
   request(obj) {
@@ -262,10 +298,22 @@ export class GameInstance extends EventEmitter {
     if (word === this.padWord && this.padSent) return;
     this.padWord = word;
     this.padSent = true;
-    this.cmd({ cmd: 'set_input', buttons: word.toString(16).padStart(4, '0') });
+    if (this.control) {
+      this.cmd({ cmd: 'set_input', buttons: word.toString(16).padStart(4, '0') });
+      return;
+    }
+    if (!this.xkeys) return;
+    const pressed = (~word) & 0xffff;
+    let out = '';
+    for (let bit = 0; bit < 16; bit++) {
+      const was = (this.keysDown >> bit) & 1, now = (pressed >> bit) & 1;
+      if (was !== now) out += `${now ? 'd' : 'u'} ${KEYSYMS[bit]}\n`;
+    }
+    this.keysDown = pressed;
+    if (out) this.xkeys.stdin.write(out);
   }
 
-  setTurbo(on) { this.cmd({ cmd: 'turbo', enabled: on ? 1 : 0 }); }
+  setTurbo(on) { if (this.control) this.cmd({ cmd: 'turbo', enabled: on ? 1 : 0 }); }
 
   async findWindow() {
     for (let i = 0; i < 100; i++) {
@@ -299,7 +347,7 @@ export class GameInstance extends EventEmitter {
       '-x264-params', 'aud=1:repeat-headers=1:sliced-threads=1',
       '-f', 'h264', 'pipe:1',
     ];
-    const p = track(spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] }));
+    const p = track(spawn(...pinned(AUX_CPUS, 'nice', ['-n', String(ENCODER_NICE), 'ffmpeg', ...args]), { stdio: ['ignore', 'pipe', 'pipe'] }));
     this.procs.video = p;
     this.videoConfig = { codec: 'avc1.64002a', width: w, height: h, fps: this.fps };
     this.emit('videoConfig', this.videoConfig);
@@ -323,7 +371,7 @@ export class GameInstance extends EventEmitter {
       '-flush_packets', '1', '-page_duration', '20000',
       '-f', 'ogg', 'pipe:1',
     ];
-    const p = track(spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] }));
+    const p = track(spawn(...pinned(AUX_CPUS, 'nice', ['-n', String(ENCODER_NICE), 'ffmpeg', ...args]), { stdio: ['ignore', 'pipe', 'pipe'] }));
     this.procs.audio = p;
     const ogg = new OggOpusParser((pkt) => this.emit('audio', pkt));
     p.stdout.on('data', (d) => ogg.push(d));
@@ -341,7 +389,7 @@ export class GameInstance extends EventEmitter {
       '-frame_duration', '20', '-flush_packets', '1', '-page_duration', '20000',
       '-f', 'ogg', 'pipe:1',
     ];
-    const p = track(spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] }));
+    const p = track(spawn(...pinned(AUX_CPUS, 'nice', ['-n', String(ENCODER_NICE), 'ffmpeg', ...args]), { stdio: ['pipe', 'pipe', 'pipe'] }));
     this.procs.audio = p;
     p.stdin.on('error', () => {});
     const ogg = new OggOpusParser((pkt) => this.emit('audio', pkt));
