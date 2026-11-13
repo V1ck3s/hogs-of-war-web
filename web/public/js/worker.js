@@ -126,6 +126,15 @@ self.onmessage = async (ev) => {
         post({ type: 'state', id: m.id, state: s }, [s.buffer]);
         break;
       }
+      case 'snapshot': {
+        // Netplay sync point: the savestate does not capture every bit of
+        // emulator state (e.g. in-flight CD reads), so the host restarts from
+        // the very bytes it sends; host and guests then run identically.
+        const s = saveState();
+        loadState(s);
+        post({ type: 'state', id: m.id, state: s }, [s.buffer]);
+        break;
+      }
       case 'loadState':
         loadState(m.state);
         post({ type: 'ok', id: m.id });

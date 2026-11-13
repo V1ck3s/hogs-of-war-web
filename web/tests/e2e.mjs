@@ -34,7 +34,7 @@ const check = (cond, msg) => { console.log((cond ? 'OK   ' : 'FAIL ') + msg); if
 
 async function openGame(tag) {
   const page = await browser.newPage();
-  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') console.log(`[${tag}] ${m.type()}: ${m.text()}`); });
+  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn' || m.text().startsWith('[netplay]')) console.log(`[${tag}] ${m.type()}: ${m.text()}`); });
   page.on('pageerror', (e) => console.log(`[${tag}] pageerror: ${e.message}`));
   await page.goto(URL);
   await page.$eval('#remember-disc', (el) => { el.checked = false; });

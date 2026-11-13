@@ -28,7 +28,7 @@ body {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.top h1 { font-size: 20px; margin: 0; letter-spacing: .02em; }
+.top h1 { font-size: 20px; margin: 0; letter-spacing: .02em; display: flex; align-items: center; gap: 8px; }
 .top h1 small { color: var(--accent); font-weight: 600; }
 #status { margin: 0; color: var(--muted); }
 #status[data-kind="error"] { color: var(--danger); }
@@ -87,16 +87,18 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
+  /* The PS1 always fills a 4:3 TV picture, whatever its internal resolution
+     (320x240, 512x240, 640x256...). */
   aspect-ratio: 4 / 3;
-  width: 100%;
-  max-height: calc(100vh - 170px);
+  width: min(100%, calc((100vh - 170px) * 4 / 3));
   margin: 0 auto;
   display: flex; align-items: center; justify-content: center;
 }
-#screen-wrap:fullscreen { max-height: none; border-radius: 0; }
+#screen-wrap:fullscreen { width: 100%; border-radius: 0; background: #000; }
+#screen-wrap:fullscreen #screen { width: min(100vw, calc(100vh * 4 / 3)); height: auto; aspect-ratio: 4 / 3; }
 #screen {
   width: 100%; height: 100%;
-  object-fit: contain;
+  object-fit: fill;
   image-rendering: pixelated;
 }
 #screen.smooth { image-rendering: auto; }
@@ -144,5 +146,5 @@ footer { padding: 10px 16px; color: var(--muted); font-size: 12px; border-top: 1
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; padding: 16px; }
-  #screen-wrap { max-height: none; }
+  #screen-wrap { width: 100%; }
 }

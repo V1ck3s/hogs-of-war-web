@@ -65,17 +65,23 @@ export async function unzip(file, onProgress) {
     let blob;
     if (e.method === 0) blob = raw;
     else if (e.method === 8) {
-      let seen = 0;
-      const progress = new TransformStream({
-        transform(chunk, ctl) {
-          seen += chunk.length;
+      // Collect the inflated stream as 8 MB Blob pieces: the browser can page
+      // those to disk, unlike one huge in-memory buffer.
+      const reader = raw.stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+      const pieces = [];
+      let chunk = [], chunkLen = 0, seen = 0;
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (value) {
+          chunk.push(value); chunkLen += value.length; seen += value.length;
+          if (chunkLen >= 8 << 20) { pieces.push(new Blob(chunk)); chunk = []; chunkLen = 0; }
           if (onProgress) onProgress((done + seen) / total);
-          ctl.enqueue(chunk);
-        },
-      });
-      blob = await new Response(
-        raw.stream().pipeThrough(new DecompressionStream('deflate-raw')).pipeThrough(progress),
-      ).blob();
+        }
+        if (end) break;
+      }
+      if (chunkLen) pieces.push(new Blob(chunk));
+      blob = new Blob(pieces);
+      if (blob.size !== e.usize) throw new Error(`Archive corrompue (${base}).`);
     } else throw new Error(`Méthode de compression ZIP ${e.method} non prise en charge.`);
     done += e.usize;
     out.push(new File([blob], base));
@@ -83,11 +89,17 @@ export async function unzip(file, onProgress) {
   return out;
 }
 
+async function isZip(f) {
+  if (DISC_EXT.test(f.name) || f.size < 22) return false;
+  const b = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+  return b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
+}
+
 /** Normalise a user selection into { files: [{name, file}], entry } */
 export async function prepareDisc(fileList, onProgress) {
   let files = [];
   for (const f of fileList) {
-    if (/\.zip$/i.test(f.name)) files.push(...(await unzip(f, onProgress)));
+    if (/\.zip$/i.test(f.name) || await isZip(f)) files.push(...(await unzip(f, onProgress)));
     else if (DISC_EXT.test(f.name)) files.push(f);
   }
   if (!files.length) throw new Error('Aucun fichier de disque reconnu (.cue/.bin, .chd, .iso ou .zip).');

@@ -159,6 +159,9 @@ async function boot() {
   const clock = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 5)'], { type: 'text/javascript' })));
   clock.onmessage = () => { if (document.hidden) { updateFps(performance.now()); pump(); } };
   setInterval(persistSram, 4000);
+  // Invitation link (#salon=CODE): join as soon as the disc is running.
+  const inv = location.hash.match(/salon=([A-Z]{4})/i);
+  if (inv) joinRoom();
 }
 
 function coreOptions() {
@@ -416,7 +419,7 @@ function onRoom(room) {
   const sig = room.members.map((m) => `${m.id}:${m.port}`).join(',') + '|' + room.delay + '|' + room.host;
   const changed = sig !== lastRoomSig;
   lastRoomSig = sig;
-  if (S.net.isHost && (changed || !wasNet)) S.pendingSync = true;
+  if (S.net.isHost && (changed || !wasNet)) S.pendingSync = 'salon modifié';
   if (!wasNet) toast(S.net.isHost ? `Salon ${room.code} créé. Donnez ce code à vos amis !` : `Salon ${room.code} rejoint.`);
 }
 
@@ -432,7 +435,7 @@ function onNetMsg(m) {
       }
       break;
     case 'needsync':
-      if (S.net.isHost) S.pendingSync = true;
+      if (S.net.isHost) S.pendingSync = 'demande de ' + nameOf(m.p);
       break;
     case 'chat':
       addChat(m.p, m.text);
@@ -458,17 +461,18 @@ function checkHashes(frame) {
   if (bad.length) {
     console.warn('désynchronisation', frame, bad);
     toast('Désynchronisation détectée : resynchronisation…');
-    S.pendingSync = true;
+    S.pendingSync = 'désynchronisation image ' + frame;
   }
 }
 
 async function doHostSync() {
+  console.info('[netplay] synchronisation :', S.pendingSync);
   S.pendingSync = false;
   const room = S.net.room;
   if (!room || !S.net.isHost) return;
   S.busy = true;
   try {
-    const st = await S.emu.call({ type: 'saveState' });
+    const st = await S.emu.call({ type: 'snapshot' });
     const sr = await S.emu.call({ type: 'getSram' });
     S.epoch = (S.ls.active ? S.ls.epoch : S.epoch) + 1;
     const frame = S.ls.active ? S.ls.frame : 0;
@@ -595,7 +599,7 @@ async function quickLoad() {
   try {
     await S.emu.call({ type: 'loadState', state: st });
     toast('État restauré.');
-    if (S.mode === 'net') S.pendingSync = true;
+    if (S.mode === 'net') S.pendingSync = 'chargement d’un état';
   } finally { S.busy = false; }
 }
 
@@ -666,7 +670,7 @@ function wire() {
     S.busy = true;
     await S.emu.call({ type: 'reset' });
     S.busy = false;
-    if (S.mode === 'net') S.pendingSync = true;
+    if (S.mode === 'net') S.pendingSync = 'redémarrage';
   };
   $('#btn-save').onclick = quickSave;
   $('#btn-load').onclick = quickLoad;

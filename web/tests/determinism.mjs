@@ -15,7 +15,8 @@ const state = a.saveState();
 const b = await createCore({ discPath: disc });
 for (let f = 0; f < 37; f++) b.runFrame(); // put B somewhere else first
 if (!b.loadState(state)) throw new Error('B could not load the state');
-if (!a.loadState(state)) throw new Error('A could not reload the state');
+// Like the netplay host, A keeps its live state unless RELOAD_HOST=1.
+if (process.env.RELOAD_HOST === '1' && !a.loadState(state)) throw new Error('A could not reload the state');
 
 let seed = 12345;
 const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32;

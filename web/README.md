@@ -65,6 +65,10 @@ Réglages de l'hôte :
 - **Vitesse du jeu** : ×1,5 à ×3 pour tout le salon, pratique pendant les
   longues réflexions de l'IA.
 
+À chaque synchronisation, l'hôte recharge lui-même l'état qu'il envoie : les
+états de PCSX-ReARMed n'enregistrent pas tout (lectures CD en cours, par
+exemple), donc tout le monde repart exactement des mêmes octets.
+
 Sécurité anti-désynchronisation : toutes les 250 images, chaque console envoie
 une empreinte de sa RAM à l'hôte ; en cas d'écart, l'hôte resynchronise
 automatiquement tout le salon.
@@ -111,6 +115,8 @@ docker run -p 8080:8080 cochons-web
 ```bash
 npm test                                          # moteur lockstep (unitaires)
 node tests/determinism.mjs "../disc-fr/<jeu>.cue" # 2 consoles, mêmes entrées => même RAM
+node tests/sync-sweep.mjs "../disc-fr/<jeu>.cue" 1 # fidélité des états de synchronisation
+node tests/netplay-sim.mjs "../disc-fr/<jeu>.cue" [état] # lockstep simulé, latence aléatoire
 node tests/e2e.mjs ../disc-fr                     # Chromium : solo + partie en réseau à 2
 node tools/headless.mjs "<jeu>.cue" --frames 3000 --shot-every 100 --out captures
 ```

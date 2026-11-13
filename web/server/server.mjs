@@ -137,9 +137,8 @@ function onJson(c, m) {
       // players share it by default (the client arbitrates who is in control).
       r.ports.set(c.id, r.members.length <= MAX_PLAYERS ? 0 : -1);
       c.room = code;
+      // The membership change makes the host send everyone a fresh sync.
       broadcastRoom(r);
-      // Ask the host to bring the newcomer in with a fresh sync.
-      send(host, { t: 'needsync', p: c.id });
       return;
     }
     case 'leave':
