@@ -51,3 +51,12 @@ if(EMSCRIPTEN)
     target_sources(psx-runtime PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/turn_owner.c")
 endif()
+
+# Code the game loads outside the AOT profile's modules, compiled ahead of
+# time from runtime captures and chained behind the AOT dispatcher
+# (tools/merge_static_overlays.py). Needed by the WebAssembly build, which
+# cannot compile at run time; harmless natively.
+file(GLOB _cochons_caps_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/caps/*.c")
+if(_cochons_caps_sources)
+    target_sources(psx-runtime PRIVATE ${_cochons_caps_sources})
+endif()

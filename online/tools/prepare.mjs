@@ -53,8 +53,13 @@ addTree(path.join(BUILD, 'assets'), 'assets');
 // like the original French release, adaptive widescreen.
 add('mods/state.toml', Buffer.from([
   'format_version = 2', '',
+  '[[package]]', 'id = "psx.enhancement.cpu-overclock"', '',
   '[[package]]', 'id = "frontschweine.enhancement.ntsc-60hz"', '',
   '[[package]]', 'id = "frontschweine.presentation.widescreen"', '',
+  // Stock CPU speed (the default 200 % doubles the work per frame); the
+  // feature stays on for its busy-wait shortcuts.
+  '[[feature]]', 'package_id = "psx.enhancement.cpu-overclock"', 'id = "cpu-overclock"',
+  'enabled = true', '[feature.values]', 'percent = "100"', '',
   '[[feature]]', 'package_id = "frontschweine.enhancement.ntsc-60hz"', 'id = "ntsc-60hz"',
   'enabled = false', '',
   // Fixed field of view, the session's aspect (the page fills it in): the

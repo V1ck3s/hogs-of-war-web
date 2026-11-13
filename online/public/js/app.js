@@ -5,6 +5,7 @@
 // demand) from frame 0, and the lockstep worker feeds it every participant's
 // inputs frame by frame. Each player has their own running copy of the game.
 import { Input, ACTIONS, keyLabel } from './input.js';
+import { Display } from './display.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -179,9 +180,8 @@ async function startGame(go) {
   let pre;
   try { pre = await preload; } catch (e) { $('#splash-text').textContent = e.message; return; }
   const aspect = aspectRatioText(go.aspect || 16 / 9);
-  const canvas = $('#canvas');
   const Module = {
-    canvas,
+    canvas: $('#sdl'),   // SDL's own surface stays hidden; Display draws the game
     arguments: [],
     print: (t) => console.log(t),
     printErr: (t) => console.warn(t),
@@ -266,6 +266,10 @@ async function attach(Module, go) {
     addEventListener('pointerdown', resume);
     resume();
   } catch (e) { console.warn('audio', e); }
+  try {
+    const b0 = Module._psx_web_frame_buffer(0), b1 = Module._psx_web_frame_buffer(1);
+    state.display = new Display($('#canvas'), memory, Module._psx_web_frame_header(), (i) => (i ? b1 : b0));
+  } catch (e) { toast(`Affichage impossible : ${e.message}`, 10000); }
   $('#splash').hidden = true;
   canvas_focus();
 }
