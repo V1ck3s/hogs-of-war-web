@@ -215,7 +215,7 @@ function onJson(c, m) {
       r.state = 'running';
       log(`salon ${r.code} : partie lancée, ${players.length} joueur(s)`);
       broadcastRoom(r);
-      broadcast(r, { t: 'go', session: r.session.id, players, delay: r.delay, aspect });
+      broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, delay: r.delay, aspect });
       return;
     }
     case 'end':

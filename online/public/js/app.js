@@ -212,6 +212,8 @@ async function startGame(go) {
       FS.chdir(root);
       Object.assign(Module.ENV, {
         PSX_WEB_LOCKSTEP: String(go.players.length),
+        // The host drives the menus (spectating host: first player).
+        PSX_WEB_LOCKSTEP_HOST: String(Math.max(0, go.players.indexOf(go.host))),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
         ...(params.get('diag') ? { PSX_RUNTIME_PERF_DIAG: '1', PSX_RUNTIME_PERF_DIAG_MS: '5000' } : {}),
@@ -282,7 +284,7 @@ function onStats(m) {
   const mine = m.holder >= 0 && state.players[m.holder] === state.id;
   $('#turn').textContent = m.team
     ? (mine ? `À vous de jouer (équipe ${m.team})` : `Tour de ${holder || '?'} (équipe ${m.team})`)
-    : (holder ? `Manette : ${holder}` : '');
+    : (holder ? `${holder} a la main` : '');
   $('#turn').classList.toggle('mine', !!(m.team && mine));
   const waiting = m.waiting.length ? ` · attente de ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
   $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;

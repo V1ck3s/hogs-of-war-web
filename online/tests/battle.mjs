@@ -66,6 +66,12 @@ async function tap(p, key, frames = 12) {
 // Menus (shared controller): Alice skips the intro, picks MULTIJOUEUR and
 // validates the team setup — same timing, in game frames, as the native
 // determinism script that reaches a 3-team battle.
+await untilFrame(400);
+{
+  const [ma, mb] = await Promise.all([info(host.page), info(guest.page)]);
+  check(ma.holder === 0 && mb.holder === 0 && /Alice a la main/.test(mb.turn),
+    `menus : l’hôte a la main chez les deux joueurs (« ${mb.turn} »)`);
+}
 let f = 1500;
 for (let i = 0; i < 4; i++) { await untilFrame(f); await tap(host.page, 'Enter'); f += 137; }
 f += 150;
