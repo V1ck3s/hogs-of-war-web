@@ -1803,7 +1803,8 @@ function(psxrecomp_add_runtime_target target)
             "-sENVIRONMENT=web,worker"
             "-sEXCEPTION_STACK_TRACES=1"
             "--profiling-funcs"
-            "-sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPU8,HEAPU16,HEAPU32,HEAP16,wasmMemory,ccall,cwrap")
+            "-sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPU8,HEAPU16,HEAPU32,HEAP16,wasmMemory,ccall,cwrap,UTF8ToString"
+            "-sEXPORTED_FUNCTIONS=_main,_malloc,_free")
         target_compile_definitions(${target} PRIVATE
             PSX_WEB=1
             PSX_NO_DEBUG_TOOLS=1)

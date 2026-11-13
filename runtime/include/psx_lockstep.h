@@ -7,6 +7,7 @@
  * (PSX_LOCKSTEP_DIGEST) to prove determinism; the WebAssembly build installs a
  * provider fed by the browser's network layer. */
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -36,6 +37,27 @@ void psx_lockstep_default_select(uint32_t frame, const uint16_t *words,
                                  uint32_t nplayers, uint16_t pads[2]);
 /* Status for the page: participant driving the game, turn's team number. */
 void psx_lockstep_set_owner(int participant, uint32_t team);
+
+/* WebAssembly lockstep: participant driving the menus, mask of participants
+ * who left (both deterministic, from the frame's control word). */
+uint32_t psx_lockstep_host(void);
+uint32_t psx_lockstep_gone_mask(void);
+
+/* Whole-machine snapshot for a player joining a running game. A peer asks
+ * for one at a boundary frame; once written, EVERY peer (the one that saved
+ * it included) loads that same snapshot, and the boundary after the load is
+ * numbered as in the saving run. Reloading everywhere keeps the copies equal
+ * even where loading itself perturbs the machine (CD timing catch-up). */
+void psx_lockstep_request_snapshot(uint32_t frame);
+/* 0 idle, 1 saving, 2 saved (file ready, *frame = its frame), -1 failed. */
+int  psx_lockstep_snapshot_status(uint32_t *frame);
+/* Path of the snapshot file (the savestate slot it uses). */
+int  psx_lockstep_snapshot_path(char *out, size_t cap);
+/* Loads `data` (a snapshot written by any peer) at the next safe point; the
+ * boundary following the load is `frame`. Returns 1 if staged. */
+int  psx_lockstep_load_snapshot(const void *data, size_t size, uint32_t frame);
+/* 1 while a staged load has not run yet. */
+int  psx_lockstep_loading(void);
 
 #ifdef __cplusplus
 }

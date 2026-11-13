@@ -43,6 +43,12 @@ const std::vector<uint8_t>* remote_chunk(const std::string& url, uint64_t index,
                 x.send();
                 if (x.status !== 200 || !x.response || x.response.byteLength !== $2) return 0;
                 HEAPU8.set(new Uint8Array(x.response), $1);
+                /* Tell the page's prefetcher (online/public/js/disc-worker.js)
+                 * where the game reads, so it fills the cache ahead of it. */
+                try {
+                    if (!globalThis.__cdgDiscBC) globalThis.__cdgDiscBC = new BroadcastChannel('cdg-disc');
+                    globalThis.__cdgDiscBC.postMessage(UTF8ToString($0));
+                } catch (e) {}
                 return 1;
             } catch (e) { return 0; }
         }, key.c_str(), data.data(), (int)len);
