@@ -11,13 +11,16 @@ export const ACTIONS = [
   ['start', 'Start'], ['select', 'Select'],
 ];
 
-// Physical key positions (event.code): same on AZERTY and QWERTY for these.
+// PC layout, by physical key position (event.code), so it is ZQSD on an
+// AZERTY keyboard and WASD on a QWERTY one: move with the left hand, act with
+// Space / Enter, pause with Escape. Arrows move too.
 export const DEFAULT_KEYS = {
-  up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
-  cross: ['KeyX', 'Space'], circle: ['KeyC'], square: ['KeyS'], triangle: ['KeyD'],
-  l1: ['KeyE'], r1: ['KeyR'], l2: ['KeyF'], r2: ['KeyG'],
-  start: ['Enter'], select: ['Backspace'],
+  up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
+  cross: ['Space', 'NumpadEnter'], circle: ['Backspace'], square: ['KeyF'], triangle: ['KeyR'],
+  l1: ['KeyQ'], r1: ['KeyE'], l2: ['KeyZ'], r2: ['KeyC'],
+  start: ['Enter', 'Escape'], select: ['Tab'],
 };
+const STORE = 'cdg.online.keys.v2';
 
 const PAD = {
   0: 'cross', 1: 'circle', 2: 'square', 3: 'triangle', 4: 'l1', 5: 'r1', 6: 'l2', 7: 'r2',
@@ -25,7 +28,7 @@ const PAD = {
 };
 
 function load() {
-  try { return { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem('cdg.online.keys') || '{}') }; } catch { return { ...DEFAULT_KEYS }; }
+  try { return { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem(STORE) || '{}') }; } catch { return { ...DEFAULT_KEYS }; }
 }
 
 export class Input {
@@ -44,17 +47,20 @@ export class Input {
     const t = e.target;
     if (t && /INPUT|TEXTAREA|SELECT/.test(t.tagName)) return;
     const mapped = Object.values(this.keys).some((l) => l.includes(e.code));
-    if (mapped) e.preventDefault();
+    // Only while the game is on screen: in the lobby Tab, Space and Enter keep
+    // their usual meaning (form navigation, buttons).
+    const play = document.getElementById('play');
+    if (mapped && play && !play.hidden && !document.querySelector('dialog[open]')) e.preventDefault();
     if (isDown) this.down.add(e.code); else this.down.delete(e.code);
   }
 
   setKey(action, code) {
     for (const a of Object.keys(this.keys)) this.keys[a] = this.keys[a].filter((c) => c !== code);
-    this.keys[action] = [code];
-    try { localStorage.setItem('cdg.online.keys', JSON.stringify(this.keys)); } catch { /* ignore */ }
+    this.keys[action] = [code, ...(this.keys[action] || []).filter((c) => c.startsWith('Arrow'))];
+    try { localStorage.setItem(STORE, JSON.stringify(this.keys)); } catch { /* ignore */ }
   }
 
-  reset() { this.keys = { ...DEFAULT_KEYS }; try { localStorage.removeItem('cdg.online.keys'); } catch { /* ignore */ } }
+  reset() { this.keys = { ...DEFAULT_KEYS }; try { localStorage.removeItem(STORE); } catch { /* ignore */ } }
 
   mask() {
     if (!this.enabled) return 0;
@@ -73,13 +79,24 @@ export class Input {
   }
 }
 
+// Letters as printed on the player's own keyboard (Z, Q on AZERTY) when the
+// browser can tell (Chrome, Edge); otherwise the AZERTY reading of the code,
+// this being a French game.
+const AZERTY = { KeyQ: 'A', KeyW: 'Z', KeyA: 'Q', KeyZ: 'W', KeyM: ',', Semicolon: 'M' };
+let layout = null;
+export const layoutReady = (navigator.keyboard && navigator.keyboard.getLayoutMap
+  ? navigator.keyboard.getLayoutMap().then((m) => { layout = m; }).catch(() => {}) : Promise.resolve());
+
 export function keyLabel(code) {
   if (!code) return '—';
   const named = {
-    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Entrée', Space: 'Espace',
-    Backspace: 'Retour arr.', ShiftLeft: 'Maj g.', ShiftRight: 'Maj d.', ControlLeft: 'Ctrl g.', ControlRight: 'Ctrl d.', Tab: 'Tab',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Entrée', NumpadEnter: 'Entrée (pavé)', Space: 'Espace',
+    Escape: 'Échap', Tab: 'Tab', Backspace: 'Retour arr.', ShiftLeft: 'Maj g.', ShiftRight: 'Maj d.', ControlLeft: 'Ctrl g.', ControlRight: 'Ctrl d.',
   };
   if (named[code]) return named[code];
+  const l = layout && layout.get(code);
+  if (l) return l.toUpperCase();
+  if (AZERTY[code]) return AZERTY[code];
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
   return code;

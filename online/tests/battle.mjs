@@ -22,7 +22,9 @@ let failures = 0;
 const check = (c, m) => { console.log((c ? 'OK   ' : 'FAIL ') + m); if (!c) failures++; };
 
 let roomCode = '';
-async function browser(name, viewport) {
+// Each player picks their own picture quality (internal resolution): the host
+// renders at 2x, the guest at 1x, and the copies must still agree.
+async function browser(name, viewport, q) {
   const b = await puppeteer.launch({
     executablePath: process.env.CHROME || '/usr/bin/chromium', headless: true, protocolTimeout: 900000,
     args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
@@ -31,7 +33,7 @@ async function browser(name, viewport) {
   await page.setViewport(viewport);
   page.on('console', (m) => { const t = m.text(); if (/désynchro|error/i.test(t)) console.log(`[${name}]`, t); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/${roomCode ? '?salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${roomCode ? '&salon=' + roomCode : ''}`);
   await page.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
   return { b, page, name };
@@ -43,11 +45,11 @@ const info = (p) => p.evaluate(() => {
     hashOk: s.hashOk || 0, desyncs: s.desyncs || 0 };
 });
 
-const host = await browser('Alice', { width: 1280, height: 720 });
+const host = await browser('Alice', { width: 1280, height: 720 }, 2);
 await host.page.click('#btn-create');
 await host.page.waitForSelector('#room:not([hidden])');
 roomCode = await host.page.$eval('#room-code2', (e) => e.textContent);
-const guest = await browser('Bruno', { width: 1100, height: 700 });
+const guest = await browser('Bruno', { width: 1100, height: 700 }, 1);
 await guest.page.click('#btn-join');
 await guest.page.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2, { timeout: 30000 });
 await host.page.click('#btn-start');
@@ -76,8 +78,8 @@ let f = 1500;
 for (let i = 0; i < 4; i++) { await untilFrame(f); await tap(host.page, 'Enter'); f += 137; }
 f += 150;
 await untilFrame(f); await tap(host.page, 'ArrowDown'); f += 87;
-await untilFrame(f); await tap(host.page, 'KeyX'); f += 87;
-for (let i = 0; i < 40; i++) { await untilFrame(f); await tap(host.page, 'KeyX'); f += 72; }
+await untilFrame(f); await tap(host.page, 'Space'); f += 87;
+for (let i = 0; i < 40; i++) { await untilFrame(f); await tap(host.page, 'Space'); f += 72; }
 console.log('      menus validés à l’image', await frameOf());
 
 // Battle: wait for a turn

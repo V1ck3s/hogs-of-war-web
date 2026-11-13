@@ -34,9 +34,9 @@
       <p id="preload" class="muted small"></p>
       <details class="help">
         <summary>Commandes</summary>
-        <p>Flèches : déplacement · <b>X</b> ou Espace : Croix (valider, tirer) · <b>C</b> : Rond · <b>S</b> : Carré ·
-          <b>D</b> : Triangle · <b>E / R</b> : L1 / R1 · <b>F / G</b> : L2 / R2 · Entrée : Start · Retour arrière : Select.
-          Échap : panneau du salon · T : discuter · F11 : plein écran. Touches modifiables, manettes reconnues.</p>
+        <p><b>Z Q S D</b> ou flèches : déplacement · <b>Espace</b> : Croix (valider, tirer) · <b>Retour arrière</b> : Rond (retour) ·
+          <b>F</b> : Carré · <b>R</b> : Triangle · <b>A / E</b> : L1 / R1 · <b>W / C</b> : L2 / R2 · <b>Entrée</b> ou <b>Échap</b> : Start (pause) ·
+          <b>Tab</b> : Select. F1 : panneau du salon · T : discuter · F11 : plein écran. Touches modifiables, manettes reconnues.</p>
       </details>
     </div>
     <footer>Projet de fan non officiel et non commercial. <i>Hogs of War / Cochons de Guerre</i> © leurs ayants droit.</footer>
@@ -50,6 +50,13 @@
       <ol id="seats" class="seats"></ol>
       <p class="muted small">Dans le jeu : <b>MULTIJOUEUR</b>, puis une équipe <b>JOUEUR</b> par place, dans l’ordre
         des places (Joueur 1, Joueur 2…). Pendant la bataille, seule l’équipe dont c’est le tour obéit à son joueur.</p>
+      <label>Qualité d’image (sur votre PC uniquement)
+        <select id="quality">
+          <option value="1">Rapide — définition d’origine (PC modestes)</option>
+          <option value="2" selected>Nette — 2× la définition</option>
+          <option value="3">Très nette — 3×</option>
+          <option value="4">Maximale — 4× (PC puissant)</option>
+        </select></label>
       <div class="host-only">
         <label>Format d’image de la partie
           <select id="aspect">
@@ -72,7 +79,7 @@
       <span class="pill">Salon <b id="room-code"></b></span>
       <span class="pill" id="turn"></span>
       <span class="pill muted" id="stats"></span>
-      <button id="btn-panel" class="pill" title="Échap">☰ Salon</button>
+      <button id="btn-panel" class="pill" title="F1">☰ Salon</button>
     </div>
     <aside id="panel" hidden>
       <h2>Salon</h2>

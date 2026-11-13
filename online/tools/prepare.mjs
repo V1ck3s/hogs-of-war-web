@@ -68,7 +68,7 @@ add('mods/state.toml', Buffer.from([
   'enabled = true', '[feature.values]', 'aspect = "16:9"', '',
 ].join('\n')));
 add('settings.toml', Buffer.from([
-  '[video]', 'renderer = "software"', 'adaptive_view = false', 'aspect_ratio = "16:9"',
+  '[video]', 'renderer = "software"', 'adaptive_view = false', 'aspect_ratio = "16:9"', 'supersampling = 1',
   'fullscreen = 0', 'vsync = "off"', '', '[audio]', 'volume = 100', '',
 ].join('\n')));
 

@@ -46,7 +46,7 @@ export class Display {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.texW = 1024; this.texH = 512;
-    this.copy = new Uint8Array(1280 * 1024 * 4);   // WebGL refuses shared views
+    this.copy = new Uint8Array(3456 * 1024 * 4);   // WebGL refuses shared views (max: 32:9 at 4x)
     const loop = () => { this.draw(); this.raf = requestAnimationFrame(loop); };
     this.raf = requestAnimationFrame(loop);
   }

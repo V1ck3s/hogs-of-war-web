@@ -62,7 +62,7 @@ let i = 0;
 while (Date.now() - t0 < SECONDS * 1000) {
   await sleep(5000);
   i++;
-  if (i % 2) await press(host.page, 'Enter'); else await press(guest.page, 'KeyX');
+  if (i % 2) await press(host.page, 'Enter'); else await press(guest.page, 'Space');
   const [a, b] = await Promise.all([info(host.page), info(guest.page)]);
   console.log(`t=${Math.round((Date.now() - t0) / 1000)}s hôte: image ${a.frame} ${a.turn} (${a.hashOk} empreintes égales) · invité: image ${b.frame} ${b.turn} (${b.hashOk})`);
   if (i % 6 === 0) {

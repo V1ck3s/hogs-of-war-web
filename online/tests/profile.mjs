@@ -2,7 +2,7 @@
 // UN JOUEUR mission (reached by the keyboard), then Chromium's sampling
 // profiler on every worker for N seconds; prints the hottest functions by
 // self time. Needs a wasm linked with --profiling-funcs.
-//   node tests/profile.mjs [seconds]
+//   [ASPECT=16:9] [Q=1..4] [SHOT=file.png] node tests/profile.mjs [seconds]
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,7 @@ const b = await puppeteer.launch({
 });
 const page = await b.newPage();
 await page.setViewport({ width: 1280, height: 720 });
-await page.goto(`http://127.0.0.1:${PORT}/?diag=1`);
+await page.goto(`http://127.0.0.1:${PORT}/?diag=1&q=${process.env.Q || 1}`);
 page.on('console', (m) => { const t = m.text(); if (/runtime cadence/.test(t)) console.log('     ', t.match(/guest=[0-9.]+ Hz/)[0], t.match(/work guest=[0-9.]+/)[0]); });
 await page.waitForFunction(() => /prêt/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.click('#btn-create');
@@ -34,9 +34,10 @@ async function tap(key) { const f0 = await frame(); await page.keyboard.down(key
 let f = 1500;
 for (let i = 0; i < 4; i++) { await untilFrame(f); await tap('Enter'); f += 137; }
 f += 150;
-for (let i = 0; i < 45; i++) { await untilFrame(f); await tap('KeyX'); f += 84; }
+for (let i = 0; i < 45; i++) { await untilFrame(f); await tap('Space'); f += 84; }
 await untilFrame(f + 200);
 console.log('mission à l’image', await frame(), '— profil sur', SECONDS, 's');
+if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
 
 const sessions = [];
 for (const t of b.targets()) {

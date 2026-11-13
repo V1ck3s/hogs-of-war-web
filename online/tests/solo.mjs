@@ -67,7 +67,7 @@ async function tap(p, key, frames = 12) {
 let f = 1500;
 for (let i = 0; i < 4; i++) { await untilFrame(f); await tap(host.page, 'Enter'); f += 137; }
 f += 150;
-for (let i = 0; i < 45; i++) { await untilFrame(f); await tap(host.page, 'KeyX'); f += 84; }
+for (let i = 0; i < 45; i++) { await untilFrame(f); await tap(host.page, 'Space'); f += 84; }
 await untilFrame(f + 300);
 const a = await info(host.page), b = await info(guest.page);
 console.log(`      mission solo à l’image ${a.frame} : Alice « ${a.turn} », Bruno « ${b.turn} »`);

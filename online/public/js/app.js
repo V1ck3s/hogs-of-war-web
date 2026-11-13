@@ -113,6 +113,16 @@ $('#btn-start').onclick = () => sendWs({ t: 'start', aspect: chosenAspect() });
 $('#btn-end').onclick = () => sendWs({ t: 'end' });
 function leave() { stopGame(); sendWs({ t: 'leave' }); state.room = null; show('#lobby'); history.replaceState(null, '', location.pathname); }
 
+// Internal rendering resolution: the software renderer draws the picture N
+// times finer than the PS1 (the game's own VRAM stays at 1x, so each player
+// may pick a different quality without breaking the lockstep).
+function quality() {
+  const q = +$('#quality').value;
+  return Math.max(1, Math.min(4, Math.round(q) || 2));
+}
+try { const q = params.get('q') || localStorage.getItem('cdg.online.quality'); if (q) $('#quality').value = q; } catch { /* ignore */ }
+$('#quality').onchange = () => { try { localStorage.setItem('cdg.online.quality', $('#quality').value); } catch { /* ignore */ } };
+
 function chosenAspect() {
   const v = $('#aspect').value;
   if (v !== 'auto') { const [a, b] = v.split(':').map(Number); return a / b; }
@@ -204,7 +214,8 @@ async function startGame(go) {
         }
         if (f.path === 'settings.toml') {
           data = new TextEncoder().encode(new TextDecoder().decode(data)
-            .replace(/aspect_ratio = "[^"]*"/, `aspect_ratio = "${aspect}"`));
+            .replace(/aspect_ratio = "[^"]*"/, `aspect_ratio = "${aspect}"`)
+            .replace(/supersampling = \d+/, `supersampling = ${quality()}`));
         }
         FS.writeFile(p, data);
       }
@@ -312,12 +323,18 @@ setInterval(pollInput, 8);
 
 addEventListener('keydown', (e) => {
   if (!state.game || input.capture) return;
-  if (e.code === 'Escape') { $('#panel').hidden = !$('#panel').hidden; e.preventDefault(); }
+  if (e.code === 'F1') { $('#panel').hidden = !$('#panel').hidden; e.preventDefault(); }
   else if (e.code === 'KeyT' && $('#panel').hidden && !/INPUT/.test(e.target.tagName)) {
     $('#panel').hidden = false; setTimeout(() => $('#chat-input').focus(), 0); e.preventDefault();
   } else if (e.code === 'F11') { e.preventDefault(); toggleFull(); }
 });
-function toggleFull() { if (document.fullscreenElement) document.exitFullscreen(); else $('#play').requestFullscreen(); }
+// Fullscreen with the keyboard locked (Chrome, Edge): Escape then reaches the
+// game (pause) instead of leaving fullscreen; holding it still leaves.
+function toggleFull() {
+  if (document.fullscreenElement) { document.exitFullscreen(); return; }
+  $('#play').requestFullscreen().then(() => navigator.keyboard && navigator.keyboard.lock && navigator.keyboard.lock().catch(() => {})).catch(() => {});
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); });
 $('#btn-full').onclick = toggleFull;
 $('#btn-panel').onclick = () => { $('#panel').hidden = !$('#panel').hidden; };
 
