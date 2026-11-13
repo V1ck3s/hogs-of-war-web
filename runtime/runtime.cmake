@@ -1779,7 +1779,13 @@ function(psxrecomp_add_runtime_target target)
             "-pthread"
             # Vendored toml11 relies on <exception> arriving transitively,
             # which Emscripten's libc++ no longer does.
-            "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include exception>")
+            "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include exception>"
+            # Native WebAssembly exceptions and setjmp/longjmp: the default
+            # JavaScript emulation routes calls through JS trampolines and
+            # cost ~12 % of the emulation thread.
+            "-fwasm-exceptions"
+            "-sSUPPORT_LONGJMP=wasm"
+            "-msimd128")
         target_link_options(${target} PRIVATE
             "--use-port=sdl2"
             "-pthread"
@@ -1790,11 +1796,13 @@ function(psxrecomp_add_runtime_target target)
             "-sMAXIMUM_MEMORY=1073741824"
             "-sSTACK_SIZE=8388608"
             "-sDEFAULT_PTHREAD_STACK_SIZE=16777216"
-            "-sNO_DISABLE_EXCEPTION_CATCHING"
+            "-fwasm-exceptions"
+            "-sSUPPORT_LONGJMP=wasm"
             "-sFORCE_FILESYSTEM=1"
             "-sEXIT_RUNTIME=0"
             "-sENVIRONMENT=web,worker"
             "-sEXCEPTION_STACK_TRACES=1"
+            "--profiling-funcs"
             "-sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPU8,HEAPU16,HEAPU32,HEAP16,wasmMemory,ccall,cwrap")
         target_compile_definitions(${target} PRIVATE
             PSX_WEB=1
