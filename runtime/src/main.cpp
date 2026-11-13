@@ -25,6 +25,9 @@
 #include "savestate.h"
 #include "psx_rewind.h"
 #include "psx_lockstep.h"
+#if defined(PSX_WEB)
+extern "C" void psx_web_publish_frame(const uint32_t *, int, int, int, int, int, int, int);
+#endif
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
 #include "host_keymap.h"
@@ -7597,6 +7600,19 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                             pin_43 ? 1 : 0, 0 /* full width */);
         netplay_note_present();
     } else {
+#if defined(PSX_WEB)
+    {
+        /* Browser: hand the frame to the page (web_present.c), no SDL present. */
+        const int web_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+        const int web_dst_w = pin_43 ? 640 * web_scale : g_logical_w;
+        const int web_content = (pin_43 && present_h > 0 && present_h < 240) ? (int)present_h : 240;
+        psx_web_publish_frame(sdl_pixel_buf, src_w, src_h, g_logical_w, web_dst_w,
+                              480 * web_scale, web_content,
+                              (depth24_frame || !g_video_aa) ? 1 : 0);
+        netplay_note_present();
+        return ep;
+    }
+#endif
     if ((!sdl_renderer || !sdl_texture) && ensure_sw_sdl_present() != 0)
         return ep;
     if (!sdl_renderer || !sdl_texture)

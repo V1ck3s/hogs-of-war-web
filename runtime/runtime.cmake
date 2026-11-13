@@ -608,7 +608,8 @@ if(EMSCRIPTEN)
         ${PSXRECOMP_ROOT}/runtime/src/crash_trace_web.c
         ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat_web.c
         ${PSXRECOMP_ROOT}/runtime/src/web_audio_bridge.c
-        ${PSXRECOMP_ROOT}/runtime/src/psx_lockstep_web.c)
+        ${PSXRECOMP_ROOT}/runtime/src/psx_lockstep_web.c
+        ${PSXRECOMP_ROOT}/runtime/src/web_present.c)
 endif()
 
 set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
