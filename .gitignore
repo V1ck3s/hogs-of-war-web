@@ -105,3 +105,6 @@ starvation_dump.jsonl
 /stream/saves/
 /cochons/build-prod/
 /stream/native/xkeys
+online/game/
+online/node_modules
+cochons/build-web/
