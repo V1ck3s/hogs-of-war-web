@@ -32,6 +32,19 @@ the fork [Nero2611/psxrecomp](https://github.com/Nero2611/psxrecomp) (branch
 `frontschweine`), and
 [recomp-ui](https://github.com/RetroPortingToolKit/recomp-ui).
 
+## Web version — Cochons de Guerre (French, online multiplayer)
+
+[`web/`](web/README.md) contains a browser port of the **French PlayStation
+release** (*Cochons de Guerre*, SLES-02766): the original PS1 game code runs in
+a WebAssembly PlayStation, so the PS1 enemy AI and the French text, voices and
+sounds are preserved, and up to four players can play online in deterministic
+lockstep (only pad inputs travel over the network). Each player loads their own
+disc in the browser; nothing is uploaded.
+
+```bash
+cd web && npm install && npm start   # http://localhost:8080
+```
+
 ## You need
 
 - **Your own copy of the game**: the German PAL release, serial SLES-02767,

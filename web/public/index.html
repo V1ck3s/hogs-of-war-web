@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cochons de Guerre — Web</title>
+  <meta name="description" content="Cochons de Guerre (PlayStation, 2000) dans le navigateur, en français, avec multijoueur en ligne.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1><span class="logo" aria-hidden="true">🐷</span> Cochons de Guerre <small>Web</small></h1>
+    <p id="status" role="status" aria-live="polite"></p>
+  </header>
+
+  <main>
+    <section id="setup" class="panel">
+      <div id="invite-banner" class="invite" hidden>
+        Vous êtes invité dans le salon <b id="invite-code"></b>. Chargez votre disque, puis cliquez sur « Rejoindre ».
+      </div>
+      <h2>Insérez votre disque</h2>
+      <p>
+        Sélectionnez <b>votre propre copie</b> du jeu PlayStation <i>Cochons de Guerre</i>
+        (version française, SLES-02766) : le fichier <code>.cue</code> avec ses pistes <code>.bin</code>,
+        une image <code>.chd</code>, ou directement l’archive <code>.zip</code>.
+        Le disque reste sur votre ordinateur : rien n’est envoyé au serveur.
+      </p>
+      <label id="drop" class="drop">
+        <input id="disc-input" type="file" multiple accept=".cue,.bin,.img,.iso,.chd,.sbi,.zip">
+        <span class="drop-title">Déposez les fichiers ici</span>
+        <span class="drop-sub">ou cliquez pour parcourir (sélectionnez le .cue <b>et</b> tous les .bin)</span>
+      </label>
+      <label class="check"><input id="remember-disc" type="checkbox" checked> Mémoriser le disque dans ce navigateur</label>
+      <div id="saved-disc" class="saved" hidden>
+        Disque mémorisé : <b id="saved-disc-name"></b>
+        <button id="use-saved" class="primary">Jouer</button>
+        <button id="forget-saved" class="ghost">Oublier</button>
+      </div>
+      <details class="help">
+        <summary>Pourquoi la version PlayStation ?</summary>
+        <p>Ce portage exécute le code original du jeu PS1 dans une PlayStation virtuelle compilée en WebAssembly :
+          l’intelligence artificielle, les voix françaises de Cochons de Guerre, la musique et les textes sont
+          ceux de la version PlayStation, à l’identique.</p>
+        <p>Facultatif : un fichier <code>.sbi</code> (protection LibCrypt) de votre disque peut être ajouté à la sélection.</p>
+      </details>
+    </section>
+
+    <section id="game" hidden>
+      <div id="screen-wrap">
+        <canvas id="screen" width="320" height="240" aria-label="Écran du jeu"></canvas>
+        <div id="toasts" aria-live="polite"></div>
+      </div>
+      <div class="bar">
+        <button id="btn-pause">Pause</button>
+        <button id="btn-reset">Redémarrer</button>
+        <button id="btn-save" title="F2">Sauver l’état</button>
+        <button id="btn-load" title="F4">Charger l’état</button>
+        <button id="btn-keys">Touches</button>
+        <button id="btn-full" title="F11">Plein écran</button>
+        <label class="vol">Volume <input id="volume" type="range" min="0" max="1" step="0.05"></label>
+        <label class="check"><input id="smooth" type="checkbox"> Lissage</label>
+        <span id="fps" class="muted"></span>
+        <span id="disc-label" class="muted"></span>
+      </div>
+    </section>
+
+    <aside id="sidebar" class="panel" hidden>
+      <h2>Multijoueur en ligne</h2>
+      <div id="net-lobby">
+        <label>Votre nom <input id="net-name" maxlength="24" placeholder="Cochon"></label>
+        <button id="btn-host" class="primary">Créer un salon</button>
+        <div class="join">
+          <input id="net-code" maxlength="4" placeholder="CODE" aria-label="Code du salon" autocapitalize="characters">
+          <button id="btn-join">Rejoindre</button>
+        </div>
+        <p class="muted small">Chaque joueur utilise son propre disque. La partie de l’hôte est
+          partagée au moment où vous rejoignez, puis toutes les consoles avancent en parfaite synchronie.</p>
+      </div>
+      <div id="net-room" hidden>
+        <p class="room">Salon <b id="room-code"></b> <button id="btn-copy" class="ghost">Copier le lien</button></p>
+        <ul id="room-members"></ul>
+        <div id="delay-row">
+          <label>Délai réseau <input id="net-delay" type="range" min="1" max="12" step="1"></label>
+          <span id="net-delay-val" class="muted small"></span>
+        </div>
+        <div id="speed-row">
+          <label>Vitesse du jeu
+            <select id="net-speed">
+              <option value="1">Normale</option>
+              <option value="1.5">×1,5</option>
+              <option value="2">×2 (tours de l’IA)</option>
+              <option value="3">×3</option>
+            </select>
+          </label>
+        </div>
+        <p id="net-status" class="muted small"></p>
+        <div id="chat-log" class="chat" aria-live="polite"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-input" maxlength="300" placeholder="Message…" aria-label="Message">
+          <button>Envoyer</button>
+        </form>
+        <button id="btn-leave" class="ghost">Quitter le salon</button>
+      </div>
+      <details class="help" open>
+        <summary>Comment jouer à plusieurs</summary>
+        <ol>
+          <li>L’hôte crée un salon et partage le code (ou le lien).</li>
+          <li>Les amis chargent leur disque puis rejoignent avec le code.</li>
+          <li>Dans le menu du jeu, choisissez <b>MULTIJOUEUR</b> et réglez autant d’emplacements
+            sur <b>JOUEUR 1…4</b> que de participants (les autres en CPU ou OFF).</li>
+          <li>Le jeu se joue au tour par tour sur la <b>manette 1</b>, partagée par tout le salon :
+            celui qui joue garde la main ; après 2 secondes sans action, le prochain joueur
+            qui appuie sur un bouton prend la manette.</li>
+        </ol>
+      </details>
+      <details class="help">
+        <summary>Commandes clavier</summary>
+        <p>Flèches : déplacement · X : Croix · C : Rond · S : Carré · D : Triangle · E/R : L1/R1 · F/G : L2/R2 ·
+          Entrée : Start · Retour arrière : Select. Tab (maintenu, solo) : avance rapide pendant la réflexion de l’IA.
+          F2/F4 : sauver/charger l’état. Les manettes USB/Bluetooth sont reconnues automatiquement.</p>
+      </details>
+    </aside>
+  </main>
+
+  <dialog id="dlg-keys">
+    <form method="dialog">
+      <h2>Touches du clavier</h2>
+      <table><tbody id="keymap"></tbody></table>
+      <div class="dlg-actions">
+        <button type="button" id="btn-keys-reset" class="ghost">Par défaut</button>
+        <button class="primary">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer>
+    Projet de fan non officiel et non commercial. <i>Hogs of War / Cochons de Guerre</i> appartient à ses ayants droit.
+    Aucune donnée du jeu n’est fournie : utilisez votre propre disque.
+  </footer>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

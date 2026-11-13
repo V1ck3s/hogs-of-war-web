@@ -88,3 +88,10 @@ starvation_dump.jsonl
 
 # Local pointer to the portable clang toolchain (written by psxrecomp_cli.py)
 /toolchain/
+
+# French disc for the web port (never commit)
+/disc-fr/
+/web/node_modules/
+/web/build/
+/web/tests/tmp/
+/web/.deps/
