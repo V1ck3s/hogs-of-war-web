@@ -45,3 +45,9 @@ foreach(_PSX_RUNTIME_CONFIG game.toml)
             "$<TARGET_FILE_DIR:psx-runtime>/${_PSX_RUNTIME_CONFIG}"
         VERBATIM)
 endforeach()
+
+# Online (WebAssembly lockstep) build: real turn ownership in battles.
+if(EMSCRIPTEN)
+    target_sources(psx-runtime PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/turn_owner.c")
+endif()

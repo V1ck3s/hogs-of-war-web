@@ -12,3 +12,4 @@
 .seats li.empty .who { color: var(--muted); font-style: italic; }
 #turn:empty { display: none; }
 #lobby[hidden] { display: none; }
+#turn.mine { background: var(--accent); color: var(--accent-ink); opacity: 1; }

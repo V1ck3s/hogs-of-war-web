@@ -60,7 +60,7 @@ function loop() {
     const status = mem.status >> 2;
     postMessage({
       t: 'stats', frame: Atomics.load(mem.u32, status), waitMs: Atomics.load(mem.u32, status + 3),
-      holder: Atomics.load(mem.u32, status + 4) - 1, waiting: ls.waitingOn(),
+      holder: Atomics.load(mem.u32, status + 4) - 1, team: Atomics.load(mem.u32, status + 5), waiting: ls.waitingOn(),
     });
   }
 }

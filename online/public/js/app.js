@@ -275,7 +275,11 @@ function canvas_focus() { $('#canvas').focus(); }
 function onStats(m) {
   state.lastStats = m;
   const holder = m.holder >= 0 ? state.names.get(state.players[m.holder]) : null;
-  $('#turn').textContent = holder ? `Manette : ${holder}` : '';
+  const mine = m.holder >= 0 && state.players[m.holder] === state.id;
+  $('#turn').textContent = m.team
+    ? (mine ? `À vous de jouer (équipe ${m.team})` : `Tour de ${holder || '?'} (équipe ${m.team})`)
+    : (holder ? `Manette : ${holder}` : '');
+  $('#turn').classList.toggle('mine', !!(m.team && mine));
   const waiting = m.waiting.length ? ` · attente de ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
   $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;
 }
