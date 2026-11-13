@@ -38,7 +38,7 @@
 /* Movie player (loaded at runtime): `for (n = 0x1FFFF; n; n--)` around
  * StGetNext; s0 holds n, decremented after each failed call. */
 #define FN_ST_GET_NEXT         0x800238A0u /* int StGetNext(u_long**, u_long**) */
-#define MOVIE_RETRY_RA         0x8005BFA0u
+#define MOVIE_RETRY_RA         0x8005BFD0u /* FR: +0x30 vs SLES-02767 (measured in RAM) */
 #define MOVIE_RETRY_START      0x1FFFFu
 #define ST_GET_NEXT_ITERATION  64u
 
@@ -92,10 +92,10 @@ static void hook_v_wait(CPUState* cpu, uint32_t address) {
 
 /* The retry loop's code, checked because other modules reuse that RAM. */
 static int movie_retry_loop_loaded(void) {
-    return psx_mod_read_word(0x8005BF98u) == 0x0C008E28u && /* jal StGetNext */
-           psx_mod_read_word(0x8005BFA0u) == 0x10400005u && /* beq v0, zero */
-           psx_mod_read_word(0x8005BFA4u) == 0x2610FFFFu && /* addiu s0, s0, -1 */
-           psx_mod_read_word(0x8005BFA8u) == 0x1600FFFBu;   /* bne s0, zero */
+    return psx_mod_read_word(0x8005BFC8u) == 0x0C008E28u && /* jal StGetNext */
+           psx_mod_read_word(0x8005BFD0u) == 0x10400005u && /* beq v0, zero */
+           psx_mod_read_word(0x8005BFD4u) == 0x2610FFFFu && /* addiu s0, s0, -1 */
+           psx_mod_read_word(0x8005BFD8u) == 0x1600FFFBu;   /* bne s0, zero */
 }
 
 static void hook_st_get_next(CPUState* cpu, uint32_t address) {

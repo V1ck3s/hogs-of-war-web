@@ -57,8 +57,10 @@ const script = [];
 for (let f = 600; f <= 2600; f += 150) script.push([f, 'Enter']);
 script.push([2750, 'ArrowDown'], [2850, 'KeyX']);
 for (let i = 0; i < 40; i++) script.push([2950 + i * 85, 'KeyX']);
-const END = 2950 + 40 * 85 + 2400;
-let next = 0, shot = 0;
+const END = 2950 + 40 * 85 + 3000;
+// During the battle: the guest takes the shared controller (host idle).
+const GUEST_AT = 2950 + 40 * 85 + 1500;
+let next = 0, shot = 0, guestDone = false;
 for (;;) {
   const f = await gameFrame(port);
   if (f < 0) { await sleep(500); continue; }
@@ -66,6 +68,15 @@ for (;;) {
   if (f >= shot) {
     await host.screenshot({ path: path.join(out, `hote_${String(f).padStart(6, '0')}.png`) });
     shot = f + 400;
+  }
+  if (!guestDone && f >= GUEST_AT) {
+    guestDone = true;
+    await guest.bringToFront();
+    for (let i = 0; i < 6; i++) { await guest.keyboard.down('ArrowLeft'); await sleep(400); await guest.keyboard.up('ArrowLeft'); await sleep(200); }
+    const g = await guest.evaluate(() => ({ holder: window.__cdg.room.holder, id: window.__cdg.id }));
+    console.log(g.holder === g.id ? 'OK   l’invité joue (manette 1) pendant la bataille' : 'FAIL l’invité n’a pas pris la manette');
+    await guest.screenshot({ path: path.join(out, 'invite_joue.png') });
+    await host.bringToFront();
   }
   if (f >= END) break;
   await sleep(50);

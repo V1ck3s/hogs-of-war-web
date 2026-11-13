@@ -95,11 +95,18 @@ proxy HTTPS (Caddy, nginx) qui transmet `/ws` en WebSocket.
 | `CDG_MAX_ROOMS` | 1 | parties simultanées (une partie ≈ 1 cœur CPU + ~800 Mo) |
 | `CDG_AUTOCOMPILE` | `../cochons/autocompile.sh` | compilation native en arrière-plan |
 | `LIBGL_ALWAYS_SOFTWARE` | 1 | 0 pour utiliser le GPU du serveur |
+| `CDG_RENDERER` | `opengl` | `software` : moteur de rendu PS1 logiciel du runtime (serveur sans GPU) |
+| `CDG_OVERCLOCK` | 200 | vitesse du CPU émulé en % (100 = d'origine) ; à 200 % les attentes actives sont court-circuitées |
+| `CDG_60HZ` | 1 | mode 60 Hz de Frontschweine (batailles à 30 i/s au lieu de 25) ; 0 = 50 Hz PAL d'origine |
 
-Performances : sur un serveur moderne (≥ 4 cœurs rapides), le jeu tourne à sa
-cadence d'origine (50 Hz PAL) en 720p. La première visite de chaque partie du
-jeu alimente le cache de compilation native (`cochons/build/cache`), et les
-visites suivantes sont plus rapides.
+Performances : le jeu doit tenir le temps réel côté serveur, sinon le son
+diffusé a des trous. Mesures sur la machine de développement (CPU virtuel QEMU
+générique à 1,8 GHz, sans GPU, ~3 à 4 fois plus lent qu'un processeur de
+bureau récent) : cinématique 37 i/s sur 60, bataille ~15 i/s. Le profil montre
+~45 % du temps dans le rendu OpenGL logiciel (llvmpipe) : un serveur avec GPU
+(`LIBGL_ALWAYS_SOFTWARE=0`) ou un CPU moderne suffit pour 60 i/s. La première
+visite de chaque partie du jeu alimente le cache de compilation native
+(`cochons/build/cache`) ; les visites suivantes sont plus rapides.
 
 ## Tests
 

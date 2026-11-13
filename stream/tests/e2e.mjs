@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +27,14 @@ let failures = 0;
 const check = (c, m) => { console.log((c ? 'OK   ' : 'FAIL ') + m); if (!c) failures++; };
 const state = (p) => p.evaluate(() => ({ room: window.__cdg.room, id: window.__cdg.id, vcfg: window.__cdg.vcfg,
   video: window.__cdg.stats.videoTotal, audio: window.__cdg.stats.audioFrames }));
+// Read-only look at the game's controller port through the runtime's local
+// control server (first instance = display :100 → port 4500).
+const padStatus = () => new Promise((resolve) => {
+  let buf = '';
+  const sock = net.connect(4500, '127.0.0.1', () => sock.write('{"id":1,"cmd":"pad_status"}\n'));
+  sock.on('data', (d) => { buf += d; if (buf.includes('\n')) { sock.destroy(); try { resolve(JSON.parse(buf)); } catch { resolve(null); } } });
+  sock.on('error', () => resolve(null));
+});
 const shot = (p, name) => p.screenshot({ path: path.join(out, name) });
 
 async function player(name, viewport) {
@@ -58,6 +67,13 @@ try {
   await sleep(800);
   s = await state(host);
   check(s.room.holder === s.id, 'le clavier de l’hôte pilote la manette 1');
+  await host.keyboard.down('KeyX');
+  await sleep(1200);
+  const pad = await padStatus();
+  await host.keyboard.up('KeyX');
+  console.log('      pad_status pendant Croix :', JSON.stringify(pad));
+  const word = pad && parseInt(String(pad.pad ?? pad.slot0 ?? pad.override ?? 'ffff'), pad && typeof pad.pad === 'string' ? 16 : 10);
+  check(pad && ((word >> 14) & 1) === 0, 'la touche X du navigateur arrive dans le jeu (Croix enfoncée sur la manette 1)');
 
   // A friend joins from a phone-shaped portrait screen.
   const guest = await player('Invité', { width: 600, height: 900 });

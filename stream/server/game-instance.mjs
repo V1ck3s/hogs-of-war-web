@@ -50,7 +50,6 @@ export class GameInstance extends EventEmitter {
     this.lastKey = null; // last keyframe AU, sent to clients joining mid-stream
     this.videoConfig = null;
     this.padWord = 0xffff;
-    this.tcp = null;
   }
 
   size() {
@@ -91,6 +90,29 @@ export class GameInstance extends EventEmitter {
     this.sinkModule = out.trim();
   }
 
+  // Per-instance mod selection (mods/state.toml): the bundled catalog is
+  // shared, the choices are not. Defaults follow Frontschweine: CPU overclock
+  // 200 % (with its busy-wait shortcuts), 60 Hz mode, instant loading,
+  // adaptive widescreen.
+  writeMods() {
+    const dir = path.join(this.workDir, 'mods');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundled = path.join(dir, 'bundled');
+    if (!fs.existsSync(bundled)) fs.symlinkSync(path.join(this.gameDir, 'mods', 'bundled'), bundled);
+    const oc = Math.max(100, Math.min(800, +(process.env.CDG_OVERCLOCK || 200)));
+    const hz60 = (process.env.CDG_60HZ ?? '1') !== '0';
+    this.fps = hz60 ? 60 : 50;
+    fs.writeFileSync(path.join(dir, 'state.toml'), [
+      'format_version = 2', '',
+      '[[package]]', 'id = "psx.enhancement.cpu-overclock"', '',
+      '[[package]]', 'id = "frontschweine.enhancement.ntsc-60hz"', '',
+      '[[feature]]', 'package_id = "psx.enhancement.cpu-overclock"', 'id = "cpu-overclock"',
+      `enabled = ${oc > 100}`, '[feature.values]', `percent = "${oc}"`, '',
+      '[[feature]]', 'package_id = "frontschweine.enhancement.ntsc-60hz"', 'id = "ntsc-60hz"',
+      `enabled = ${hz60}`, '',
+    ].join('\n'));
+  }
+
   writeSettings() {
     const { w, h } = this.size();
     const q = QUALITY[this.quality];
@@ -99,7 +121,7 @@ export class GameInstance extends EventEmitter {
     // per-instance copy of the game directory through symlinks.
     const settings = [
       '[video]',
-      'renderer = "opengl"',
+      `renderer = "${process.env.CDG_RENDERER || 'opengl'}"`,
       `aspect_ratio = "${reduce(num, den)}"`,
       'adaptive_view = true',
       `supersampling = ${q.scale}`,
@@ -117,11 +139,12 @@ export class GameInstance extends EventEmitter {
     // Per-instance directory: symlink the read-only game files, keep
     // settings/saves private to this instance.
     for (const f of fs.readdirSync(this.gameDir)) {
-      if (['settings.toml', 'saves'].includes(f)) continue;
+      if (['settings.toml', 'saves', 'mods'].includes(f)) continue;
       const dst = path.join(this.workDir, f);
       if (!fs.existsSync(dst)) fs.symlinkSync(path.join(this.gameDir, f), dst);
     }
     fs.mkdirSync(path.join(this.workDir, 'saves'), { recursive: true });
+    this.writeMods();
     this.writeSettings();
     const env = {
       ...process.env,
@@ -149,26 +172,57 @@ export class GameInstance extends EventEmitter {
     });
   }
 
+  // The runtime's control server answers ONE request per connection, at the
+  // next vblank. Commands are therefore sent one at a time on short-lived
+  // localhost connections. Every distinct pad state is delivered in order (a
+  // quick tap = press then release, each held for at least one game frame);
+  // only identical consecutive states are merged, and the queue is capped so
+  // a stalled game never accumulates seconds of stale input.
   async connectDebug() {
     for (let i = 0; i < 200 && !this.stopped; i++) {
-      try {
-        this.tcp = await new Promise((resolve, reject) => {
-          const s = net.connect(this.debugPort, '127.0.0.1', () => resolve(s));
-          s.once('error', reject);
-        });
-        this.tcp.setNoDelay(true);
-        this.tcp.on('error', () => {});
-        this.tcp.on('data', () => {}); // responses are ignored
-        this.cmdId = 1;
-        this.sendPad(0xffff);
-        return;
-      } catch { await sleep(250); }
+      const r = await this.request({ cmd: 'ping' });
+      if (r && r.ok) { this.queue = []; this.sendPad(0xffff); return; }
+      await sleep(250);
     }
     throw new Error('le jeu ne répond pas sur son port de contrôle');
   }
 
+  request(obj) {
+    return new Promise((resolve) => {
+      let buf = '';
+      const s = net.connect(this.debugPort, '127.0.0.1', () => {
+        s.setNoDelay(true);
+        s.write(JSON.stringify({ id: 1, ...obj }) + '\n');
+      });
+      const done = (v) => { s.destroy(); resolve(v); };
+      s.setTimeout(5000, () => done(null));
+      s.on('data', (d) => {
+        buf += d;
+        const nl = buf.indexOf('\n');
+        if (nl >= 0) { try { done(JSON.parse(buf.slice(0, nl))); } catch { done(null); } }
+      });
+      s.on('error', () => done(null));
+      s.on('close', () => done(buf ? null : null));
+    });
+  }
+
   cmd(obj) {
-    if (this.tcp && !this.tcp.destroyed) this.tcp.write(JSON.stringify({ id: this.cmdId++, ...obj }) + '\n');
+    this.queue = this.queue || [];
+    const last = this.queue[this.queue.length - 1];
+    if (obj.cmd === 'set_input' && last && last.cmd === 'set_input' && last.buttons === obj.buttons) return;
+    this.queue.push(obj);
+    while (this.queue.length > 16) this.queue.shift();
+    if (!this.pumping) this.pump();
+  }
+
+  async pump() {
+    this.pumping = true;
+    while (this.queue.length && !this.stopped) {
+      const obj = this.queue.shift();
+      const r = await this.request(obj);
+      if (obj.cmd === 'set_input') this.padApplied = r && r.ok ? obj.buttons : this.padApplied;
+    }
+    this.pumping = false;
   }
 
   /** Active-low PS1 pad word for controller 1. */
@@ -263,7 +317,6 @@ export class GameInstance extends EventEmitter {
 
   async stop() {
     this.stopped = true;
-    if (this.tcp) this.tcp.destroy();
     for (const k of ['video', 'audio', 'game', 'xvfb']) {
       const p = this.procs[k];
       if (p && p.exitCode === null) {
