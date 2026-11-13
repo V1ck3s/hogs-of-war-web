@@ -93,7 +93,7 @@ export class GameInstance extends EventEmitter {
 
   size() {
     const q = QUALITY[this.quality];
-    const a = Math.max(4 / 3, Math.min(21 / 9, this.aspect));
+    const a = Math.max(4 / 3, Math.min(32 / 9, this.aspect));
     const h = q.h;
     const w = Math.round((h * a) / 8) * 8;
     return { w, h };
@@ -122,9 +122,9 @@ export class GameInstance extends EventEmitter {
   }
 
   async startXvfb() {
-    // Large enough for 1080p ultrawide; we capture only the game window.
+    // Large enough for 1080p super-ultrawide (32:9 = 3840x1080); we capture only the game window.
     // The X server is on the game's presentation path: it shares the game cores.
-    this.procs.xvfb = track(spawn(...pinned(GAME_CPUS, 'Xvfb', [this.display, '-screen', '0', '2560x1080x24', '-nolisten', 'tcp', '-noreset']), { stdio: 'ignore' }));
+    this.procs.xvfb = track(spawn(...pinned(GAME_CPUS, 'Xvfb', [this.display, '-screen', '0', '3840x1080x24', '-nolisten', 'tcp', '-noreset']), { stdio: 'ignore' }));
     for (let i = 0; i < 50; i++) {
       if (fs.existsSync(`/tmp/.X11-unix/X${this.n}`)) return;
       await sleep(100);

@@ -18,7 +18,7 @@ Linux natif. La logique du jeu est donc exécutée nativement :
 - **textes, briefings, voix et sons français** : ceux du disque français ;
 - rendu moderne : OpenGL, résolution interne ×1 à ×3 (480p/720p/1080p),
   écran large (« widescreen hack » de psxrecomp) adapté **à n'importe quel
-  format d'écran** de 4:3 à 21:9 ;
+  format d'écran** de 4:3 à 32:9 (super-ultralarge, ex. 5120x1440) ;
 - le code que le jeu charge en cours de partie (modules de bataille, lecteur
   de cinématiques) est **compilé en natif en arrière-plan** (gcc) et conservé
   en cache.
@@ -54,10 +54,12 @@ Touches modifiables (bouton **Touches**), manettes USB/Bluetooth reconnues.
 Échap : panneau du salon · T : discuter · F11 : plein écran.
 
 **N'importe quel écran** : l'image remplit la fenêtre quelle que soit sa
-taille, sa résolution ou son format (16:9, 21:9, 4:3, 16:10, portrait — avec
+taille, sa résolution ou son format (16:9, 21:9, 32:9, 4:3, 16:10, portrait — avec
 bandes noires si nécessaire), nette sur les écrans haute densité. L'écran de
-l'hôte fixe le champ de vision : sur un écran 21:9 le jeu montre un champ de
-bataille plus large (pas d'étirement). L'hôte choisit aussi la qualité (480p,
+l'hôte fixe le champ de vision : sur un écran 21:9 ou 32:9 le jeu montre un champ de
+bataille plus large (pas d'étirement ; les menus 2D restent en 4:3 au centre).
+En 32:9, mesuré sur ce serveur sans GPU en 360p : bataille à 44 Hz au lieu de
+50 (le champ plus large coûte plus cher à rendre). L'hôte choisit aussi la qualité (480p,
 720p, 1080p) et peut **accélérer** les tours des équipes CPU.
 
 ## Installer le serveur

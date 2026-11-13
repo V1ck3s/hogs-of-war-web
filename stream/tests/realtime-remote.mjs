@@ -89,7 +89,7 @@ function client(name, onBinary) {
 }
 
 const host = await client('Hôte');
-host.send({ t: 'create', quality: process.env.RT_QUALITY || '360p', aspect: 16 / 9 });
+host.send({ t: 'create', quality: process.env.RT_QUALITY || '360p', aspect: +(process.env.RT_ASPECT || 16 / 9) });
 for (let i = 0; i < 600 && !(host.room && host.room.state === 'running'); i++) await sleep(250);
 check(host.room && host.room.state === 'running', 'jeu lancé sur le serveur (build de production)');
 check(/entrées : XTest/.test(log), 'entrées clavier par XTest (aucun port de debug)');

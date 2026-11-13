@@ -17,7 +17,7 @@ following are reused as-is:
 - the mods: **Instant Loading**, **CPU Overclock** (busy-waits; the FMV retry
   loop is at `0x8005BFD0` in FR, measured in RAM), **60 Hz Mode**, **Widescreen**
   — here in an *adaptive* mode (the window shape sets the field of view from
-  4:3 to 21:9, which the streaming server uses) — and **Fast Enemy AI**: the
+  4:3 to 32:9, which the streaming server uses) — and **Fast Enemy AI**: the
   battle module `LOAD/L640V2.MGL` loads at `0x8005B3D0` in FR (+0x30), so the
   AI's terrain line walk is at `0x8006ADA0` with its tile table at
   `0x80078698`. The native hook is proven equivalent to the game's own routine
