@@ -136,7 +136,13 @@ de streaming avec deux joueurs distants (`tests/realtime-remote.mjs`, qualité
 | Menu principal (touches pressées) | 47,9 – 50,0 Hz |
 | **Moyenne sur 195 s** | **49,92 Hz** |
 
-Vidéo reçue 49,9 img/s, son reçu 179,8 s pour 180 s. Sans ces optimisations
+Vidéo reçue 49,9 img/s, son reçu 179,8 s pour 180 s. Avec deux vrais
+navigateurs Chromium (hôte + invité) qui décodent et affichent le flux sur la
+même machine (`tests/realtime.mjs`, 270p) : 50,03 Hz en moyenne (minimum
+49,7), 50,1 img/s et 181 s de son reçus par l'invité, 0 sous-alimentation de
+la lecture audio ; le son décodé par son navigateur est transcrit en français
+(p = 0,98). Le mode 60 Hz n'atteint pas le temps réel sur cette machine (52 Hz
+mesurés en bataille sur 60) : utilisez `CDG_60HZ=0` sur un serveur modeste. Sans ces optimisations
 (build de debug, OpenGL logiciel) la même machine plafonnait à ~15 Hz en
 bataille. Avec un GPU (`LIBGL_ALWAYS_SOFTWARE=0`, `CDG_RENDERER=opengl`) les
 qualités 720p/1080p rendent la scène en résolution interne ×2/×3.
