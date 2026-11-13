@@ -1,0 +1,46 @@
+{
+  "format_version": 1,
+  "game": {
+    "name": "Cochons de Guerre",
+    "id": "SLES-02766",
+    "boot_exe": "SLES_027.66"
+  },
+  "marketing": {
+    "description": "",
+    "publisher": "Infogrames",
+    "year": "2000",
+    "region": "PAL-FR",
+    "players": 2
+  },
+  "rom_identity": {
+    "cue_name": "Cochons de Guerre, Les (France).cue",
+    "bin_name": "Cochons de Guerre, Les (France) (Track 1).bin",
+    "track_counts": [
+      3
+    ],
+    "require_cue": true,
+    "data_track": {
+      "size": 386236032,
+      "md5": "edc9a4fd9b15b4efccd935d18e69f289",
+      "sha1": "ccd4b6ea6fa454fa367ae871a7879e31f87f75a8",
+      "crc32": "6697784a"
+    },
+    "disc_fp": "61ad3611ef5b8494a419a35f6c25a397b665d6bee1f53715b165b406544ac3b4"
+  },
+  "exe": {
+    "load_address": "0x80010000",
+    "entry_pc": "0x800178CC",
+    "text_size": "0x000E7800",
+    "stack_base": "0x801FFFF0"
+  },
+  "seeds": {
+    "count": 264,
+    "source": "boot_exe_jal"
+  },
+  "warnings": [],
+  "notes": [
+    "entry_pc/load_address/text_size/stack_base taken from PS-X EXE header.",
+    "seeds are first-pass boot-EXE JAL targets (+ entry); expect to grow as overlays / runtime paths are discovered.",
+    "required_disc_fp is psxrecomp-toc-v1 (matches runtime DiscIdentity)."
+  ]
+}

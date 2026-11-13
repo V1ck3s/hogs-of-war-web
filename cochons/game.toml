@@ -1,0 +1,89 @@
+# Autofilled by tools/new_project_layout/probe_disc.py from your legal dump.
+# Review before shipping. Runtime quirks / overlay seeds still need hand work.
+
+[game]
+name = "Cochons de Guerre"
+id = "SLES-02766"
+players = 2
+exe = "disc/SLES_027.66"
+disc = "disc/Cochons de Guerre, Les (France).cue"
+load_address = "0x80010000"
+entry_pc = "0x800178CC"
+text_size = "0x000E7800"
+stack_base = "0x801FFFF0"
+
+# Digests are for data Track 01 (first BINARY FILE / TRACK 01).
+[prepare_disc]
+out_dir = "disc"
+bin_name = "Cochons de Guerre, Les (France) (Track 1).bin"
+cue_name = "Cochons de Guerre, Les (France).cue"
+boot_exe = "SLES_027.66"
+known_sizes = [386236032]
+known_md5 = [
+  "edc9a4fd9b15b4efccd935d18e69f289",
+]
+known_sha1 = [
+  "ccd4b6ea6fa454fa367ae871a7879e31f87f75a8",
+]
+known_crc32 = [
+  "6697784a",
+]
+
+[recompiler]
+seeds = "seeds/ghidra_funcs.txt"
+out_dir = "generated"
+strict = true
+# Taken over by game mods (same addresses as Frontschweine, below the FR/DE
+# code shift): CD file library Open/ReadAt/Load (Instant Loading), libetc
+# v_wait and StGetNext (CPU overclock busy-waits), GetVideoMode (60 Hz).
+mod_function_entry_funcs = ["0x80016A78", "0x80016BD0", "0x80016D9C", "0x8001DA54",
+                            "0x800238A0", "0x8001E30C"]
+
+[runtime]
+window_title = "Cochons de Guerre"
+memcard_dir = "saves"
+overlay_cache = true
+# From the Frontschweine (DE) project: the game loads code at runtime into its
+# own boot EXE text (FMV player, battle modules over 0x80030000..0x8005B000).
+# Treating text from 0x18000 up as overlay region lets compiled shards own it
+# instead of the dirty-RAM interpreter. Same layout in the French EXE below
+# 0x80046000 (seed lists identical up to there).
+overlay_region_floor = "0x18000"
+
+# Hottest interpreted entry PCs measured in a French multiplayer battle
+# (dirty_ram_stats, insns > 200k). Same mechanism as Frontschweine's list:
+# no load_addr/bytes_crc; byte guards select the matching shard at runtime.
+[[overlays]]
+entries = ["0x80040FE4", "0x80046E70", "0x80047A9C", "0x80047DB8", "0x80047F9C", "0x8004B3D4", "0x8004C1AC", "0x8004ED38", "0x8004F058", "0x80051490", "0x8005C494", "0x8005C4DC", "0x8005D000", "0x8005E260", "0x8006350C", "0x80063DFC", "0x80065EF4", "0x80071464", "0x800719A4", "0x80085830", "0x80085838", "0x80085C00", "0x80085C28", "0x8009DC80", "0x800AA3B0", "0x800CE6DC", "0x800CF714", "0x800E33F4", "0x800E3408"]
+
+# Widescreen tuning from Frontschweine (addresses below the FR/DE shift point,
+# identical in both releases). adaptive_view lets the streaming server set any
+# aspect from 4:3 to 21:9 by resizing the game window.
+[widescreen]
+native_wide = false
+gameplay_state_addr = "0x8002AA50"
+gameplay_state_values = ["0x80042768"]
+gte_game_mode = true
+hud_sprt_squash = true
+auto_ui_squash = true
+hud43_rank_band = 25
+hud43_keep = [
+  { op = "0x64", height = 11 },
+  { op = "0x2C", width = 43, height = 22 },
+]
+adaptive_view = true
+offer_ultrawide = true
+
+[video]
+renderer = "opengl"
+aspect_ratio = "16:9"
+
+[controller]
+default_mode = "digital"
+
+# Online mount gate: digests + track count + optional TOC fingerprint
+# (see docs/NETPLAY.md).
+[netplay]
+require_cue = true
+required_tracks = 3
+required_disc_fp = "61ad3611ef5b8494a419a35f6c25a397b665d6bee1f53715b165b406544ac3b4"

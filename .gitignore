@@ -95,3 +95,11 @@ starvation_dump.jsonl
 /web/build/
 /web/tests/tmp/
 /web/.deps/
+# French recompiled build (generated from the user's disc: never commit)
+/cochons/disc/
+/cochons/generated/
+/cochons/build/
+/cochons/.cache/
+/cochons/saves/
+/stream/node_modules/
+/stream/saves/

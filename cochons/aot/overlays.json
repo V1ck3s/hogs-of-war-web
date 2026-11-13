@@ -1,0 +1,107 @@
+{
+  "schema": "psxrecomp AOT methods v1",
+  "game_id": "SLES-02766",
+  "disc_hashes": {
+    "sha1": "ccd4b6ea6fa454fa367ae871a7879e31f87f75a8"
+  },
+  "static_output": "generated/overlays_static.c",
+  "strict_bounds": true,
+  "images": [
+    {
+      "method": "opcode_nibble_lz_files",
+      "files": [
+        {
+          "file": "CHARS/ANIMS/MCAPX.MAD",
+          "load_addr": "0x8003D004",
+          "decoded_sha256": "752153bf4470c9bd7517997affc1d95a625c7a5dc511814fb3bb47b3bb7c26e0",
+          "entries": [
+            "0x8003EE00",
+            "0x8003EFF4",
+            "0x8003F108",
+            "0x8003F160",
+            "0x8003F1D8",
+            "0x8003F398",
+            "0x8003F864",
+            "0x8003FF2C",
+            "0x80040160",
+            "0x80040190",
+            "0x800401B4",
+            "0x800411F8",
+            "0x80041358",
+            "0x8004168C",
+            "0x800416D0",
+            "0x800417A8",
+            "0x800417E8",
+            "0x80041B3C",
+            "0x80041B7C",
+            "0x80042748",
+            "0x80042768",
+            "0x800427B0",
+            "0x80042AD0",
+            "0x80042AFC",
+            "0x80042BC4",
+            "0x80042D40",
+            "0x80046DC4",
+            "0x80046E70",
+            "0x80048898",
+            "0x80048A58",
+            "0x80048C54",
+            "0x8004A618",
+            "0x8004B46C",
+            "0x8004B560",
+            "0x8004C1B4",
+            "0x8004D8B8",
+            "0x8004D9D8",
+            "0x8004DCF8",
+            "0x8004E078",
+            "0x8004E738",
+            "0x8004EFD8",
+            "0x80051210",
+            "0x80051230",
+            "0x80051350"
+          ]
+        },
+        {
+          "file": "FE/ALLMOD.MAD",
+          "load_addr": "0x80080678",
+          "decoded_sha256": "9220cb5992ee3d0043a96e471df7981ba4f1429bed1ef6d1eb8f32405c34a738",
+          "entries": [
+            "0x80080B18",
+            "0x800810E0",
+            "0x800811A8",
+            "0x80081204",
+            "0x80081648",
+            "0x800818A4",
+            "0x800819F0",
+            "0x80081BEC",
+            "0x80081CA0",
+            "0x80081F40",
+            "0x80082490",
+            "0x80082508",
+            "0x8008259C",
+            "0x800826B8",
+            "0x800827AC",
+            "0x800830B8",
+            "0x80083438",
+            "0x80083564",
+            "0x800836B0",
+            "0x80083750",
+            "0x800837B4",
+            "0x80083888",
+            "0x80083E50"
+          ],
+          "excluded_ranges": [
+            {
+              "start": "0x80083FE4",
+              "end": "0x800C6AA0",
+              "reason": "Data after the module code (no jr ra past 0x80083FDC); the prologue scan mistakes a word there for a function start",
+              "sha256": "7d8e9a65cd8e63f8fbed92e8770f97c82d5b8cda3ae5d01b1389b3b5a6e62742"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "expected_records": 2,
+  "note": "French SLES-02766 profile derived from the Frontschweine SLES-02767 profile: decoded hashes recomputed from the French disc; MCAPX.MAD entries measured live in a French battle (dirty_ram_stats entries>0); other entries relocated by prologue matching (cochons/tools_rehash_aot.py). Data-only files at 0x8005B3A0 / 0x800F7398 removed: in the French release their bytes fail the generated-C audit when scanned as code, and they are not hot in battle. AUDIO/E3SOUNDS.BIN removed: not resident in French battles and its relocated entries produced unresolved block labels."
+}

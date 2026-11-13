@@ -32,7 +32,17 @@ the fork [Nero2611/psxrecomp](https://github.com/Nero2611/psxrecomp) (branch
 `frontschweine`), and
 [recomp-ui](https://github.com/RetroPortingToolKit/recomp-ui).
 
-## Web version — Cochons de Guerre (French, online multiplayer)
+## Cochons de Guerre online — server-side streaming
+
+[`cochons/`](cochons/README.md) builds the **French release** (*Cochons de
+Guerre*, SLES-02766) with this same recompiler and Frontschweine's tuning,
+as a native Linux program. [`stream/`](stream/README.md) runs it on a server
+and streams it (H.264 + Opus, WebCodecs) to browsers: players need neither the
+game nor an install, play with the keyboard at any resolution and any aspect
+ratio (4:3 to 21:9 rendered natively), and play together remotely on the
+shared controller (the game is turn-based).
+
+## Web version — Cochons de Guerre (French, browser emulation)
 
 [`web/`](web/README.md) contains a browser port of the **French PlayStation
 release** (*Cochons de Guerre*, SLES-02766): the original PS1 game code runs in

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cochons de Guerre — en ligne</title>
+  <meta name="description" content="Cochons de Guerre (2000), version française, joué en streaming depuis le serveur, en multijoueur à distance.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <section id="lobby">
+    <div class="card">
+      <h1><img src="favicon.svg" alt="" width="40" height="40"> Cochons de Guerre <small>en ligne</small></h1>
+      <p class="lead">Le jeu tourne sur le serveur et vous est envoyé en vidéo : rien à installer, pas de disque
+        à fournir. Jouez au clavier (ou à la manette), seul ou à plusieurs à distance.</p>
+      <div id="invite" class="invite" hidden>Invitation au salon <b id="invite-code"></b> : entrez votre nom puis « Rejoindre ».</div>
+      <label>Votre nom <input id="name" maxlength="24" placeholder="Cochon" autocomplete="nickname"></label>
+      <div class="row">
+        <div class="col">
+          <h2>Nouvelle partie</h2>
+          <label>Qualité d’image
+            <select id="lobby-quality">
+              <option value="480p">480p (connexion modeste)</option>
+              <option value="720p" selected>720p</option>
+              <option value="1080p">1080p</option>
+            </select>
+          </label>
+          <button id="btn-create" class="primary">Lancer une partie</button>
+        </div>
+        <div class="col">
+          <h2>Rejoindre des amis</h2>
+          <div class="join">
+            <input id="code" maxlength="4" placeholder="CODE" aria-label="Code du salon" autocapitalize="characters">
+            <button id="btn-join">Rejoindre</button>
+          </div>
+          <div id="room-list" class="room-list"></div>
+        </div>
+      </div>
+      <p id="capacity" class="muted small"></p>
+      <details class="help">
+        <summary>Commandes</summary>
+        <p>Flèches : déplacement · <b>X</b> ou Espace : Croix (valider, tirer) · <b>C</b> : Rond · <b>S</b> : Carré ·
+          <b>D</b> : Triangle · <b>E / R</b> : L1 / R1 · <b>F / G</b> : L2 / R2 · Entrée : Start · Retour arrière : Select.
+          Échap : panneau du salon · T : discuter · F11 : plein écran. Touches modifiables, manettes reconnues.</p>
+      </details>
+    </div>
+    <footer>Projet de fan non officiel et non commercial. <i>Hogs of War / Cochons de Guerre</i> © leurs ayants droit.</footer>
+  </section>
+
+  <section id="play" hidden>
+    <canvas id="screen" aria-label="Image du jeu"></canvas>
+    <div id="splash"><div class="spinner" aria-hidden="true"></div><p id="splash-text">Démarrage du jeu sur le serveur…</p></div>
+    <div id="hud">
+      <span class="pill">Salon <b id="room-code"></b></span>
+      <span class="pill" id="holder"></span>
+      <span class="pill muted" id="stats"></span>
+      <button id="btn-panel" class="pill" title="Échap">☰ Salon</button>
+    </div>
+    <aside id="panel" hidden>
+      <h2>Salon</h2>
+      <p><button id="btn-copy">Copier le lien d’invitation</button></p>
+      <ul id="members"></ul>
+      <p class="muted small">La partie se joue au tour par tour sur une seule manette, partagée : celui qui joue
+        garde la main, et après 2 secondes sans action le prochain joueur qui appuie la prend.
+        Dans le jeu : <b>MULTIJOUEUR</b>, un emplacement <b>JOUEUR</b> par participant.</p>
+      <div class="host-only">
+        <label>Qualité <select id="quality"><option>480p</option><option>720p</option><option>1080p</option></select></label>
+        <label class="check"><input id="turbo" type="checkbox"> Accélérer (tours de l’IA)</label>
+      </div>
+      <label class="check"><input id="spectate" type="checkbox"> Regarder seulement</label>
+      <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <div class="buttons">
+        <button id="btn-keys">Touches</button>
+        <button id="btn-full">Plein écran</button>
+        <button id="btn-leave" class="danger">Quitter</button>
+      </div>
+      <div id="chat-log" class="chat" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <input id="chat-input" maxlength="300" placeholder="Message (T)" aria-label="Message">
+        <button>Envoyer</button>
+      </form>
+    </aside>
+    <div id="toasts" aria-live="polite"></div>
+  </section>
+
+  <dialog id="dlg-keys">
+    <form method="dialog">
+      <h2>Touches du clavier</h2>
+      <table><tbody id="keymap"></tbody></table>
+      <div class="dlg-actions">
+        <button type="button" id="btn-keys-reset">Par défaut</button>
+        <button class="primary">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="js/client.js"></script>
+</body>
+</html>
