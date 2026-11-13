@@ -35,9 +35,11 @@ out_dir = "generated"
 strict = true
 # Taken over by game mods (same addresses as Frontschweine, below the FR/DE
 # code shift): CD file library Open/ReadAt/Load (Instant Loading), libetc
-# v_wait and StGetNext (CPU overclock busy-waits), GetVideoMode (60 Hz).
+# v_wait and StGetNext (CPU overclock busy-waits), GetVideoMode (60 Hz), and
+# the battle module's terrain line walk the enemy AI calls while it thinks
+# (Fast Enemy AI) — 0x8006ADA0 in the French release (0x8006AD70 in DE).
 mod_function_entry_funcs = ["0x80016A78", "0x80016BD0", "0x80016D9C", "0x8001DA54",
-                            "0x800238A0", "0x8001E30C"]
+                            "0x800238A0", "0x8001E30C", "0x8006ADA0"]
 
 [runtime]
 window_title = "Cochons de Guerre"

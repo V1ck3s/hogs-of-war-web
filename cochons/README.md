@@ -14,14 +14,27 @@ following are reused as-is:
 
 - `overlay_region_floor = 0x18000` and the widescreen settings (addresses below
   the shift);
-- the mods: **Instant Loading**, **CPU Overclock** (busy-waits), **60 Hz Mode**,
-  **Widescreen** — here in an *adaptive* mode (the window shape sets the field
-  of view from 4:3 to 21:9, which the streaming server uses). *Fast Enemy AI* is
-  not ported (its battle-module address differs in the French version);
+- the mods: **Instant Loading**, **CPU Overclock** (busy-waits; the FMV retry
+  loop is at `0x8005BFD0` in FR, measured in RAM), **60 Hz Mode**, **Widescreen**
+  — here in an *adaptive* mode (the window shape sets the field of view from
+  4:3 to 21:9, which the streaming server uses) — and **Fast Enemy AI**: the
+  battle module `LOAD/L640V2.MGL` loads at `0x8005B3D0` in FR (+0x30), so the
+  AI's terrain line walk is at `0x8006ADA0` with its tile table at
+  `0x80078698`. The native hook is proven equivalent to the game's own routine
+  by `tests/terrain_line_equiv.c` (real routine from the battle RAM run in a
+  MIPS interpreter vs the hook: 40 000 random lines, 0 differences in return
+  value, registers and RAM; a deliberately wrong hook is caught every time);
 - the AOT profile of runtime-loaded modules (`aot/overlays.json`): hashes
-  recomputed from the French disc, `CHARS/ANIMS/MCAPX.MAD` entry points
-  **measured** in a French battle (`dirty_ram_stats`), front-end module entries
-  relocated (`tools_rehash_aot.py`).
+  recomputed from the French disc, `CHARS/ANIMS/MCAPX.MAD` and
+  `LOAD/L640V2.MGL` entry points **measured** in a French battle
+  (`dirty_ram_stats`), front-end module entries relocated
+  (`tools_rehash_aot.py`).
+
+```bash
+# equivalence proof of the Fast Enemy AI hook (needs a 2 MB battle RAM dump,
+# e.g. the runtime's read_ram 0x80000000 0x200000 during a battle)
+cc -O2 -Icochons/tests/stubs cochons/tests/terrain_line_equiv.c -o equiv && ./equiv battle_ram.bin 40000
+```
 
 The rest of the code the game loads at runtime is compiled to native in the
 background (`autocompile.sh`, gcc) and cached in `build/cache/`.

@@ -29,12 +29,14 @@ psxrecomp_add_game_runtime(psx-runtime
 )
 
 # Frontschweine's game-owned plugins, retargeted to the French release.
-# (Fast Enemy AI is not ported: its battle-module address differs in SLES-02766.)
+# Fast Enemy AI: French routine located at 0x8006ADA0 (battle module loaded
+# 0x30 higher than in SLES-02767) and proven equivalent (tests/terrain_line_equiv.c).
 target_sources(psx-runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/instant_loading.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/ntsc_60hz.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/busy_waits.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/widescreen.c")
+    "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/widescreen.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/terrain_line.c")
 
 foreach(_PSX_RUNTIME_CONFIG game.toml)
     add_custom_command(TARGET psx-runtime POST_BUILD

@@ -98,10 +98,67 @@
               "sha256": "7d8e9a65cd8e63f8fbed92e8770f97c82d5b8cda3ae5d01b1389b3b5a6e62742"
             }
           ]
+        },
+        {
+          "file": "LOAD/L640V2.MGL",
+          "load_addr": "0x8005B3D0",
+          "decoded_sha256": "da455647888a54859bbcb647ede69b5c5d871b416867517dc62a3646b4a19940",
+          "entries": [
+            "0x8005C2F0",
+            "0x8005C4DC",
+            "0x8005C664",
+            "0x8005CF20",
+            "0x8005D000",
+            "0x8005D1F4",
+            "0x8005E3F0",
+            "0x80062BF4",
+            "0x800633C0",
+            "0x800654FC",
+            "0x80065CA0",
+            "0x80065CD8",
+            "0x80065EF4",
+            "0x80065FE8",
+            "0x8006606C",
+            "0x80066098",
+            "0x800660C8",
+            "0x800660F4",
+            "0x80066124",
+            "0x80066150",
+            "0x80066498",
+            "0x800664C4",
+            "0x800665F0",
+            "0x8006665C",
+            "0x800666C8",
+            "0x80066734",
+            "0x80066E50",
+            "0x80066E84",
+            "0x80066ED4",
+            "0x80066F08",
+            "0x8006ADA0",
+            "0x8006D8C4",
+            "0x8006D904",
+            "0x80070108",
+            "0x80070480",
+            "0x80070510",
+            "0x8007051C",
+            "0x800705B0",
+            "0x8007063C",
+            "0x80070914",
+            "0x800709DC",
+            "0x80070F98",
+            "0x800712A8",
+            "0x800713B0",
+            "0x80071464",
+            "0x8007192C",
+            "0x800719A4",
+            "0x80072168",
+            "0x800724EC",
+            "0x800761E4"
+          ]
         }
       ]
     }
   ],
-  "expected_records": 2,
-  "note": "French SLES-02766 profile derived from the Frontschweine SLES-02767 profile: decoded hashes recomputed from the French disc; MCAPX.MAD entries measured live in a French battle (dirty_ram_stats entries>0); other entries relocated by prologue matching (cochons/tools_rehash_aot.py). Data-only files at 0x8005B3A0 / 0x800F7398 removed: in the French release their bytes fail the generated-C audit when scanned as code, and they are not hot in battle. AUDIO/E3SOUNDS.BIN removed: not resident in French battles and its relocated entries produced unresolved block labels."
+  "expected_records": 3,
+  "note": "French SLES-02766 profile derived from the Frontschweine SLES-02767 profile: decoded hashes recomputed from the French disc; MCAPX.MAD entries measured live in a French battle (dirty_ram_stats entries>0); other entries relocated by prologue matching (cochons/tools_rehash_aot.py). Data-only files at 0x8005B3A0 / 0x800F7398 removed: in the French release their bytes fail the generated-C audit when scanned as code, and they are not hot in battle. AUDIO/E3SOUNDS.BIN removed: not resident in French battles and its relocated entries produced unresolved block labels. LOAD/L640V2.MGL (battle module) added at its French load address 0x8005B3D0 (+0x30 vs DE; verified byte-identical in battle RAM) with measured hot entries and the terrain line routine."
 }

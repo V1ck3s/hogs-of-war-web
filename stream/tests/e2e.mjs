@@ -93,6 +93,48 @@ try {
   check(g.room.holder === g.id, 'l’invité prend la manette après l’inactivité de l’hôte');
   await shot(guest, 'invite-portrait.png');
 
+  // Any screen: the guest's window takes many sizes / densities / shapes; the
+  // canvas must use the full device resolution and show the picture
+  // letterboxed (game pixels present, black only outside the picture).
+  const screens = [
+    [3840, 2160, 1, '4K 16:9'], [1920, 1080, 2, '1080p HiDPI ×2'], [2560, 1080, 1, '21:9'],
+    [1024, 768, 1, '4:3'], [1440, 900, 1.5, '16:10 ×1.5'], [390, 844, 3, 'téléphone portrait ×3'],
+    [844, 390, 3, 'téléphone paysage ×3'], [800, 600, 1, 'SVGA'],
+  ];
+  for (const [w, h, dpr, label] of screens) {
+    await guest.bringToFront();
+    await guest.setViewport({ width: w, height: h, deviceScaleFactor: dpr });
+    await sleep(1500);
+    const r = await guest.evaluate(() => {
+      const c = document.querySelector('#screen');
+      const ctx = c.getContext('2d');
+      const f = window.__cdg.lastFrame;
+      const fw = f ? f.displayWidth : 0, fh = f ? f.displayHeight : 0;
+      const sc = Math.min(c.width / fw, c.height / fh);
+      const dw = Math.round(fw * sc), dh = Math.round(fh * sc);
+      // Redraw the current frame, then compare an 8x8 grid of the on-screen
+      // picture with the same grid of the decoded frame itself.
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(f, (c.width - dw) >> 1, (c.height - dh) >> 1, dw, dh);
+      const ref = new OffscreenCanvas(fw, fh).getContext('2d');
+      ref.drawImage(f, 0, 0);
+      let diff = 0, n = 0;
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const px = ((c.width - dw) >> 1) + Math.floor((x + 0.5) * dw / 8);
+        const py = ((c.height - dh) >> 1) + Math.floor((y + 0.5) * dh / 8);
+        const a = ctx.getImageData(px, py, 1, 1).data;
+        const b = ref.getImageData(Math.floor((x + 0.5) * fw / 8), Math.floor((y + 0.5) * fh / 8), 1, 1).data;
+        diff += Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); n++;
+      }
+      return { cw: c.width, ch: c.height, vw: innerWidth, vh: innerHeight, dpr: devicePixelRatio, fw, fh, dw, dh, err: diff / n / 3 };
+    });
+    const full = Math.abs(r.cw - Math.round(r.vw * Math.min(r.dpr, 3))) <= 2 && Math.abs(r.ch - Math.round(r.vh * Math.min(r.dpr, 3))) <= 2;
+    const fits = r.dw <= r.cw && r.dh <= r.ch && (r.dw >= r.cw - 2 || r.dh >= r.ch - 2);
+    check(full && fits && r.fw > 0 && r.err < 24, `écran ${label} (${w}x${h} ×${dpr}) : toile ${r.cw}x${r.ch}, image ${r.dw}x${r.dh} ajustée, écart moyen à l'image décodée ${r.err.toFixed(1)}/255`);
+    await shot(guest, `invite-${w}x${h}.png`);
+  }
+  await guest.setViewport({ width: 600, height: 900 });
+
   // Host switches to an ultrawide window: the game re-renders at 21:9.
   await host.bringToFront();
   await host.setViewport({ width: 1680, height: 720 });

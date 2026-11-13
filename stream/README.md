@@ -26,7 +26,7 @@ Linux natif. La logique du jeu est donc exécutée nativement :
 ```
 navigateur ──WebSocket──► stream/server ──► jeu natif (Xvfb + OpenGL, PulseAudio)
    ▲  H.264 + Opus (WebCodecs)              │ x11grab → x264 (zerolatency)
-   └─────────────────────────────────────── │ pulse   → Opus 20 ms
+   └─────────────────────────────────────── │ sortie SPU du jeu → Opus 20 ms
         état de la manette (clavier) ──────► port de contrôle TCP du runtime (manette 1)
 ```
 
@@ -96,12 +96,15 @@ proxy HTTPS (Caddy, nginx) qui transmet `/ws` en WebSocket.
 | `CDG_AUTOCOMPILE` | `../cochons/autocompile.sh` | compilation native en arrière-plan |
 | `LIBGL_ALWAYS_SOFTWARE` | 1 | 0 pour utiliser le GPU du serveur |
 | `CDG_SSAA` | auto | résolution interne ×1..×4 (auto : selon la qualité avec GPU, ×1 en rendu logiciel) |
+| `CDG_AUDIO_SOURCE` | `spu` | `spu` : échantillons lus directement dans la sortie SPU du jeu (aucun silence inséré même si le serveur prend du retard) ; `pulse` : capture de la carte son (PulseAudio) |
 | `CDG_RENDERER` | `opengl` | `software` : moteur de rendu PS1 logiciel du runtime (serveur sans GPU) |
 | `CDG_OVERCLOCK` | 200 | vitesse du CPU émulé en % (100 = d'origine) ; à 200 % les attentes actives sont court-circuitées |
 | `CDG_60HZ` | 1 | mode 60 Hz de Frontschweine (batailles à 30 i/s au lieu de 25) ; 0 = 50 Hz PAL d'origine |
 
-Performances : le jeu doit tenir le temps réel côté serveur, sinon le son
-diffusé a des trous. Mesures sur la machine de développement (CPU virtuel QEMU
+Performances : le jeu doit tenir le temps réel côté serveur pour une lecture
+fluide. S'il prend du retard, le son reste complet (lu à la source, sans
+silence inséré) et le lecteur du navigateur agrandit son tampon (60 ms → 1,5 s)
+pour limiter les coupures. Mesures sur la machine de développement (CPU virtuel QEMU
 générique à 1,8 GHz, sans GPU, ~3 à 4 fois plus lent qu'un processeur de
 bureau récent) : cinématique 37 i/s sur 60, bataille ~15 i/s. Le profil montre
 ~45 % du temps dans le rendu OpenGL logiciel (llvmpipe) : un serveur avec GPU
@@ -115,6 +118,18 @@ visite de chaque partie du jeu alimente le cache de compilation native
 npm test                       # analyseurs H.264/Ogg, arbitre de la manette
 node tests/e2e.mjs             # Chromium : salon, vidéo + son décodés, clavier → jeu, 2 joueurs
 node tests/playthrough.mjs out # partie complète au clavier via le flux (21:9), l'invité joue en bataille
+node tests/voices.mjs joueur.wav 240  # son décodé par le navigateur du joueur pendant l'intro
+```
+
+Vérification des voix côté joueur : `tests/voices.mjs` enregistre l'Opus
+décodé par le navigateur ; transcrit avec whisper.cpp (`small`), langue
+détectée **français**, par exemple : « La truffe c'est la force du porc qui
+contrôle la truffe, contrôle le monde… nous allons regarder ensemble des
+petits films très bien fichus pour mieux comprendre les enjeux de cette
+guerre ! ».
+
+```bash
+# (fin)
 ```
 
 ## Mentions légales

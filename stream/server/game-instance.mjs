@@ -81,8 +81,13 @@ export class GameInstance extends EventEmitter {
 
   async start() {
     fs.mkdirSync(this.workDir, { recursive: true });
+    // 'spu' (default): read the game's own SPU output ring through the control
+    // port — every sample the game produces, in order, with no silence
+    // inserted when the server falls behind real time. 'pulse': capture the
+    // game's sound card output (needs PulseAudio).
+    this.audioSource = process.env.CDG_AUDIO_SOURCE === 'pulse' ? 'pulse' : 'spu';
     await this.startXvfb();
-    await this.startAudioSink();
+    if (this.audioSource === 'pulse') await this.startAudioSink();
     await this.startGame();
     await this.connectDebug();
     await this.placeWindow();
@@ -176,7 +181,7 @@ export class GameInstance extends EventEmitter {
     const env = {
       ...process.env,
       DISPLAY: this.display,
-      SDL_AUDIO_DRIVER: 'pulseaudio',
+      SDL_AUDIO_DRIVER: this.audioSource === 'pulse' ? 'pulseaudio' : 'dummy',
       PULSE_SINK: this.sink,
       PSX_NO_LAUNCHER: '1',
       PSX_VSYNC: '0',
@@ -309,6 +314,7 @@ export class GameInstance extends EventEmitter {
   }
 
   startAudio() {
+    if (this.audioSource === 'spu') { this.startSpuAudio(); return; }
     const args = [
       '-hide_banner', '-loglevel', 'error', '-nostdin',
       '-f', 'pulse', '-fragment_size', '1920', '-i', `${this.sink}.monitor`,
@@ -323,6 +329,50 @@ export class GameInstance extends EventEmitter {
     p.stdout.on('data', (d) => ogg.push(d));
     p.stderr.on('data', (d) => this.log('[ffmpeg audio] ' + String(d).trim()));
     p.on('exit', () => { if (!this.stopped && this.procs.audio === p) setTimeout(() => this.startAudio(), 500); });
+  }
+
+  // Opus encoder fed with raw 44.1 kHz s16 stereo from the SPU output tap.
+  startSpuAudio() {
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-nostdin',
+      '-probesize', '32', '-analyzeduration', '0', '-fflags', 'nobuffer',
+      '-f', 's16le', '-ar', '44100', '-ac', '2', '-i', 'pipe:0',
+      '-ar', '48000', '-c:a', 'libopus', '-b:a', '128k', '-application', 'lowdelay',
+      '-frame_duration', '20', '-flush_packets', '1', '-page_duration', '20000',
+      '-f', 'ogg', 'pipe:1',
+    ];
+    const p = track(spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] }));
+    this.procs.audio = p;
+    p.stdin.on('error', () => {});
+    const ogg = new OggOpusParser((pkt) => this.emit('audio', pkt));
+    p.stdout.on('data', (d) => ogg.push(d));
+    p.stderr.on('data', (d) => this.log('[ffmpeg audio] ' + String(d).trim()));
+    p.on('exit', () => { if (!this.stopped && this.procs.audio === p) setTimeout(() => this.startSpuAudio(), 500); });
+    if (!this.spuTimer) this.pollSpu();
+  }
+
+  async pollSpu() {
+    const file = path.join(this.workDir, 'spu-chunk.wav');
+    this.spuTimer = true;
+    while (!this.stopped) {
+      const started = Date.now();
+      if (this.spuNext === undefined) {
+        const r = await this.request({ cmd: 'audio_wav', path: file, tap: 0, start: -1, count: 1 });
+        if (r && r.ok) this.spuNext = r.tap_total;
+      } else {
+        const r = await this.request({ cmd: 'audio_wav', path: file, tap: 0, start: String(this.spuNext), count: '0' });
+        if (r && r.ok && r.frames > 0) {
+          try {
+            const wav = fs.readFileSync(file);
+            const pcm = wav.subarray(44, 44 + r.frames * 4);
+            this.spuNext += r.frames;
+            const a = this.procs.audio;
+            if (a && a.stdin.writable) a.stdin.write(pcm);
+          } catch { /* next round */ }
+        }
+      }
+      await sleep(Math.max(0, 50 - (Date.now() - started)));
+    }
   }
 
   /** Change picture shape/quality: resize the game window, restart the encoder. */
@@ -352,6 +402,7 @@ export class GameInstance extends EventEmitter {
     })));
     if (this.sinkModule) await run('pactl', ['unload-module', this.sinkModule]);
   }
+
 }
 
 function gcd(a, b) { return b ? gcd(b, a % b) : a; }
