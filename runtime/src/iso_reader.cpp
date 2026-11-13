@@ -8,6 +8,88 @@
 #include <cstdio>
 #include <limits>
 
+#if defined(PSX_WEB)
+#include <emscripten/emscripten.h>
+#include <unordered_map>
+#include <list>
+/* Streamed disc: chunks of a remote BIN fetched on demand with a synchronous
+ * request from the emulation pthread (a worker), kept in an LRU cache. Chunk
+ * URLs are immutable, so the browser's HTTP cache keeps them across visits. */
+namespace {
+constexpr uint64_t kRemoteChunk = 256u * 1024u;
+constexpr size_t   kRemoteCacheChunks = 384;           /* 96 MiB */
+struct RemoteChunk { std::vector<uint8_t> data; std::list<std::string>::iterator lru; };
+std::unordered_map<std::string, RemoteChunk> g_remote_cache;
+std::list<std::string> g_remote_lru;
+
+const std::vector<uint8_t>* remote_chunk(const std::string& url, uint64_t index,
+                                         uint64_t size) {
+    const std::string key = url + "/" + std::to_string(index);
+    auto it = g_remote_cache.find(key);
+    if (it != g_remote_cache.end()) {
+        g_remote_lru.splice(g_remote_lru.begin(), g_remote_lru, it->second.lru);
+        return &it->second.data;
+    }
+    const uint64_t off = index * kRemoteChunk;
+    const uint64_t len = std::min<uint64_t>(kRemoteChunk, size - off);
+    std::vector<uint8_t> data(len);
+    int ok = 0;
+    for (int attempt = 0; attempt < 5 && !ok; attempt++) {
+        ok = EM_ASM_INT({
+            try {
+                var x = new XMLHttpRequest();
+                x.open('GET', UTF8ToString($0), false);
+                x.responseType = 'arraybuffer';
+                x.send();
+                if (x.status !== 200 || !x.response || x.response.byteLength !== $2) return 0;
+                HEAPU8.set(new Uint8Array(x.response), $1);
+                return 1;
+            } catch (e) { return 0; }
+        }, key.c_str(), data.data(), (int)len);
+    }
+    if (!ok) {
+        std::fprintf(stderr, "psxrecomp: disc chunk %s failed\n", key.c_str());
+        return nullptr;
+    }
+    if (g_remote_cache.size() >= kRemoteCacheChunks) {
+        g_remote_cache.erase(g_remote_lru.back());
+        g_remote_lru.pop_back();
+    }
+    g_remote_lru.push_front(key);
+    RemoteChunk& c = g_remote_cache[key];
+    c.data = std::move(data);
+    c.lru = g_remote_lru.begin();
+    return &c.data;
+}
+}  // namespace
+#endif
+
+/* Read `len` bytes at `offset` of a segment's BIN (local file or streamed). */
+static bool seg_read(PS1::BinSegment* seg, uint64_t offset, uint8_t* out, size_t len) {
+#if defined(PSX_WEB)
+    if (!seg->remote_url.empty()) {
+        if (offset + len > seg->remote_size) return false;
+        while (len) {
+            const uint64_t index = offset / kRemoteChunk;
+            const std::vector<uint8_t>* c = remote_chunk(seg->remote_url, index, seg->remote_size);
+            if (!c) return false;
+            const uint64_t in = offset - index * kRemoteChunk;
+            const size_t n = (size_t)std::min<uint64_t>(len, c->size() - in);
+            std::memcpy(out, c->data() + in, n);
+            out += n; offset += n; len -= n;
+        }
+        return true;
+    }
+#endif
+    seg->file.clear();
+    seg->file.seekg(static_cast<std::streampos>(offset), std::ios::beg);
+    if (!seg->file.good()) { seg->file.clear(); return false; }
+    seg->file.read(reinterpret_cast<char*>(out), (std::streamsize)len);
+    const bool ok = seg->file.gcount() == (std::streamsize)len;
+    seg->file.clear();
+    return ok;
+}
+
 namespace PS1 {
 
 // PS1 CD-ROM sector size (Mode 2, Form 1 user data)
@@ -313,6 +395,20 @@ bool ISOReader::Open(const std::string& filename) {
     for (const std::string& bin_name : bin_files) {
         BinSegment seg;
         seg.path = bin_name;
+        uint64_t size = 0;
+#if defined(PSX_WEB)
+        {
+            std::ifstream remote(bin_name + ".remote");
+            std::string url;
+            uint64_t remote_size = 0;
+            if (remote && (remote >> url >> remote_size) && remote_size > 0) {
+                seg.remote_url = url;
+                seg.remote_size = remote_size;
+                size = remote_size;
+            }
+        }
+        if (seg.remote_url.empty()) {
+#endif
         seg.file.open(bin_name, std::ios::binary);
         if (!seg.file.is_open()) {
             Close();
@@ -325,7 +421,10 @@ bool ISOReader::Open(const std::string& filename) {
             Close();
             return false;
         }
-        const uint64_t size = static_cast<uint64_t>(file_size);
+        size = static_cast<uint64_t>(file_size);
+#if defined(PSX_WEB)
+        }
+#endif
         seg.raw          = (size % RAW_SECTOR_SIZE) == 0;
         seg.sector_count = static_cast<uint32_t>(size / (seg.raw ? RAW_SECTOR_SIZE
                                                                  : SECTOR_SIZE));
@@ -556,41 +655,13 @@ bool ISOReader::ReadSector(uint32_t lba, uint8_t* buffer) {
     BinSegment* seg = &segments_[(size_t)span->segment];
     const uint32_t local_lba = span->file_sector + (lba - span->disc_start);
 
-    // Clear any error flags from a previous failed read
-    seg->file.clear();
-
     if (seg->raw) {
         // Raw BIN format - read full sector, extract user data
-        std::streampos offset =
-            static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE + RAW_DATA_OFFSET;
-        seg->file.seekg(offset, std::ios::beg);
-
-        if (!seg->file.good()) {
-            seg->file.clear();
-            return false;
-        }
-
-        seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
-        std::streamsize bytes_read = seg->file.gcount();
-        bool success = (bytes_read == SECTOR_SIZE);
-        seg->file.clear();
-        return success;
-    } else {
-        // ISO format - sectors are already 2048 bytes
-        std::streampos offset = static_cast<std::streampos>(local_lba) * SECTOR_SIZE;
-        seg->file.seekg(offset, std::ios::beg);
-
-        if (!seg->file.good()) {
-            seg->file.clear();
-            return false;
-        }
-
-        seg->file.read(reinterpret_cast<char*>(buffer), SECTOR_SIZE);
-        std::streamsize bytes_read = seg->file.gcount();
-        bool success = (bytes_read == SECTOR_SIZE);
-        seg->file.clear();
-        return success;
+        return seg_read(seg, (uint64_t)local_lba * RAW_SECTOR_SIZE + RAW_DATA_OFFSET,
+                        buffer, SECTOR_SIZE);
     }
+    // ISO format - sectors are already 2048 bytes
+    return seg_read(seg, (uint64_t)local_lba * SECTOR_SIZE, buffer, SECTOR_SIZE);
 }
 
 bool ISOReader::ReadRawSector(uint32_t lba, uint8_t* buffer) {
@@ -616,19 +687,7 @@ bool ISOReader::ReadRawSector(uint32_t lba, uint8_t* buffer) {
     }
     const uint32_t local_lba = span->file_sector + (lba - span->disc_start);
 
-    seg->file.clear();
-    std::streampos offset = static_cast<std::streampos>(local_lba) * RAW_SECTOR_SIZE;
-    seg->file.seekg(offset, std::ios::beg);
-    if (!seg->file.good()) {
-        seg->file.clear();
-        return false;
-    }
-
-    seg->file.read(reinterpret_cast<char*>(buffer), RAW_SECTOR_SIZE);
-    std::streamsize bytes_read = seg->file.gcount();
-    bool success = (bytes_read == RAW_SECTOR_SIZE);
-    seg->file.clear();
-    return success;
+    return seg_read(seg, (uint64_t)local_lba * RAW_SECTOR_SIZE, buffer, RAW_SECTOR_SIZE);
 }
 
 bool ISOReader::IsOpen() const {

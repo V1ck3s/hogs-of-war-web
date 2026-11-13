@@ -430,6 +430,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_texture_banks.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_lockstep.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_bios_backend.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
@@ -591,6 +592,23 @@ if(PSX_NETPLAY
 else()
     set(PSXRECOMP_HAS_LOBBY_CLIENT FALSE)
     set(PSXRECOMP_LOBBY_INCLUDE_DIR "")
+endif()
+
+if(EMSCRIPTEN)
+    # Browsers cannot execute host machine code produced at run time: the
+    # recompiled code is all ahead-of-time; gaps use the dirty-RAM interpreter.
+    list(REMOVE_ITEM PSXRECOMP_RUNTIME_SOURCES
+        ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
+        ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
+        ${PSXRECOMP_ROOT}/runtime/src/crash_trace.c
+        ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c)
+    list(APPEND PSXRECOMP_RUNTIME_SOURCES
+        ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer_unavailable.c
+        ${PSXRECOMP_ROOT}/runtime/src/psx_fiber_single_context.c
+        ${PSXRECOMP_ROOT}/runtime/src/crash_trace_web.c
+        ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat_web.c
+        ${PSXRECOMP_ROOT}/runtime/src/web_audio_bridge.c
+        ${PSXRECOMP_ROOT}/runtime/src/psx_lockstep_web.c)
 endif()
 
 set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
@@ -1757,7 +1775,10 @@ function(psxrecomp_add_runtime_target target)
     if(EMSCRIPTEN)
         target_compile_options(${target} PRIVATE
             "--use-port=sdl2"
-            "-pthread")
+            "-pthread"
+            # Vendored toml11 relies on <exception> arriving transitively,
+            # which Emscripten's libc++ no longer does.
+            "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include exception>")
         target_link_options(${target} PRIVATE
             "--use-port=sdl2"
             "-pthread"
@@ -1770,7 +1791,10 @@ function(psxrecomp_add_runtime_target target)
             "-sDEFAULT_PTHREAD_STACK_SIZE=16777216"
             "-sNO_DISABLE_EXCEPTION_CATCHING"
             "-sFORCE_FILESYSTEM=1"
-            "-sEXIT_RUNTIME=0")
+            "-sEXIT_RUNTIME=0"
+            "-sENVIRONMENT=web,worker"
+            "-sEXCEPTION_STACK_TRACES=1"
+            "-sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPU8,HEAPU16,HEAPU32,HEAP16,wasmMemory,ccall,cwrap")
         target_compile_definitions(${target} PRIVATE
             PSX_WEB=1
             PSX_NO_DEBUG_TOOLS=1)

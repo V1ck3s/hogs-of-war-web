@@ -106,6 +106,71 @@ extern "C" void psx_sdl_audio_unlock(SDL_AudioDeviceID)
     if (s_audio_stream) (void)SDL_UnlockAudioStream(s_audio_stream);
 }
 
+#elif defined(PSX_WEB)
+
+/* Browser audio: the emulation pthread writes S16 stereo frames into a ring in
+ * shared wasm memory; an AudioWorklet on the page (psx-audio-worklet.js) reads
+ * it directly. No per-chunk thread hop, and nothing touches Web Audio from the
+ * emulation thread. JS discovers the ring with psx_web_audio_ring(). */
+#include <emscripten/emscripten.h>
+#include <atomic>
+
+#define PSX_WEB_AUDIO_FRAMES (1u << 16)          /* ~1.5 s at 44.1 kHz */
+static int16_t s_web_ring[PSX_WEB_AUDIO_FRAMES * 2];
+/* [0] write index (frames, free-running), [1] read index (worklet),
+ * [2] sample rate, [3] ring size in frames. */
+static std::atomic<uint32_t> s_web_ctl[4];
+
+extern "C" EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_audio_ring(void) { return (uintptr_t)s_web_ring; }
+extern "C" EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_audio_ctl(void) { return (uintptr_t)s_web_ctl; }
+
+extern "C" SDL_AudioDeviceID psx_sdl_audio_open(
+    const PsxSdlAudioSpec *want, PsxSdlAudioSpec *have)
+{
+    if (want->channels != 2) return 0;
+    s_web_ctl[2].store((uint32_t)want->freq);
+    s_web_ctl[3].store(PSX_WEB_AUDIO_FRAMES);
+    if (have) {
+        std::memset(have, 0, sizeof(*have));
+        have->freq = want->freq;
+        have->format = want->format;
+        have->channels = 2;
+        have->samples = want->samples;
+    }
+    return 1;
+}
+extern "C" int psx_sdl_audio_resume(SDL_AudioDeviceID) { return 0; }
+extern "C" void psx_sdl_audio_close(SDL_AudioDeviceID) {}
+extern "C" void psx_sdl_audio_clear(SDL_AudioDeviceID)
+{
+    s_web_ctl[0].store(s_web_ctl[1].load());
+}
+extern "C" Uint32 psx_sdl_audio_queued_size(SDL_AudioDeviceID)
+{
+    const uint32_t w = s_web_ctl[0].load(), r = s_web_ctl[1].load();
+    const uint32_t q = w - r;
+    return (q > PSX_WEB_AUDIO_FRAMES ? 0u : q) * 4u;
+}
+extern "C" int psx_sdl_audio_queue(
+    SDL_AudioDeviceID, const void *data, Uint32 bytes)
+{
+    const int16_t *src = (const int16_t *)data;
+    uint32_t frames = bytes / 4u;
+    uint32_t w = s_web_ctl[0].load(std::memory_order_relaxed);
+    const uint32_t r = s_web_ctl[1].load();
+    const uint32_t room = PSX_WEB_AUDIO_FRAMES - (w - r > PSX_WEB_AUDIO_FRAMES ? 0u : w - r);
+    if (frames > room) frames = room;             /* overflow: drop the tail */
+    for (uint32_t i = 0; i < frames; i++, w++) {
+        const uint32_t k = (w & (PSX_WEB_AUDIO_FRAMES - 1u)) * 2u;
+        s_web_ring[k] = src[i * 2u];
+        s_web_ring[k + 1u] = src[i * 2u + 1u];
+    }
+    s_web_ctl[0].store(w, std::memory_order_release);
+    return 0;
+}
+extern "C" void psx_sdl_audio_lock(SDL_AudioDeviceID) {}
+extern "C" void psx_sdl_audio_unlock(SDL_AudioDeviceID) {}
+
 #else
 
 extern "C" SDL_AudioDeviceID psx_sdl_audio_open(

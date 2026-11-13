@@ -73,6 +73,10 @@ struct BinSegment {
     uint32_t      start_lba;     // disc sector of this file's first stored sector
     uint32_t      sector_count;  // sectors stored in this file
     bool          raw;           // 2352-byte raw sectors (BIN) vs 2048 (ISO)
+    // WebAssembly: the BIN is streamed from the server in fixed chunks
+    // (<bin>.remote holds "URL SIZE"); empty for a local file.
+    std::string   remote_url;
+    uint64_t      remote_size = 0;
 };
 
 /**

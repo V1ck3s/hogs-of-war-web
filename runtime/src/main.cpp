@@ -24,6 +24,7 @@
 #include "load_accel.h"
 #include "savestate.h"
 #include "psx_rewind.h"
+#include "psx_lockstep.h"
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
 #include "host_keymap.h"
@@ -2265,12 +2266,16 @@ static void launcher_warning(const char* title, const std::string& msg) {
     // hang an unattended/CI/scripted run forever waiting for a click.
     // SDL_ShowSimpleMessageBox is cross-platform; the Win32-only MessageBoxA left
     // macOS and Linux users with a silent exit (v0.4.0 macOS report, 2026-09-15).
+#if !defined(PSX_WEB)  /* no modal from the emulation worker; stderr shows it */
     if (!g_headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, title, msg.c_str(), NULL);
+#endif
 }
 
 static void launcher_info(const char* title, const std::string& msg) {
     std::fprintf(stderr, "%s: %s\n", title, msg.c_str());
+#if !defined(PSX_WEB)
     if (!g_headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, title, msg.c_str(), NULL);
+#endif
 }
 
 /* Game display name for picker dialogs ("Tomba!"); set after the game
@@ -2419,6 +2424,12 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
 
 static bool validate_disc_for_launch(const std::filesystem::path& path,
                                      const std::string& game_id) {
+#if defined(PSX_WEB)
+    /* Browser: the server prepared and streams the disc (iso_reader's
+     * .remote tracks); there is no local image to inspect here. */
+    (void)path; (void)game_id;
+    return true;
+#endif
     const DiscValidation v = validate_disc_image(path, game_id);
     if (!v.opened) {
         launcher_warning("Disc Image Not Found", v.detail + "\n\nSelected path:\n" + path.string());
@@ -6908,7 +6919,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         }
         /* Solo resim self-check replay republishes the recorded rows itself —
          * live sampling must not touch SIO during the replay window. */
-        if (!psx_selfcheck_replay_input()) {
+        if (psx_lockstep_active()) {
+            /* Lockstep: the frame's pads come from the shared input stream. */
+            psx_lockstep_boundary();
+        } else if (!psx_selfcheck_replay_input()) {
             if (g_headless)
                 sample_headless_pad_into_sio(override);
             else
@@ -7192,7 +7206,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * vsync-light box). Re-stamp the ring's input mark to measure from here.
          * Self-check record keeps pads boundary-latched (netplay tick
          * semantics) — the mid-frame re-sample would fork the resim. */
-        if (g_low_latency_input && !psx_selfcheck_input_locked()) {
+        if (g_low_latency_input && !psx_selfcheck_input_locked() &&
+            !psx_lockstep_active()) {
             SDL_GameControllerUpdate();  /* refresh pad state after the wait */
             SDL_PumpEvents();            /* refresh keyboard state */
             sample_pad_into_sio(override);
@@ -15273,7 +15288,13 @@ session_reboot:
     refresh_player_devices();  /* open SDL handles to match the player config */
 #ifndef PSX_SDL_NO_AUDIO
     audio_trace_init();
+#if defined(PSX_WEB)
+    /* Browser: the AudioWorklet ring in psx_sdl_audio.cpp needs no SDL audio
+     * subsystem (whose Emscripten backend cannot open from a pthread). */
+    if (true) {
+#else
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+#endif
         PsxSdlAudioSpec want = {};
         PsxSdlAudioSpec have = {};
         want.freq = g_audio_freq;
@@ -15779,6 +15800,7 @@ session_reboot:
             }
         }
     }
+    psx_lockstep_init_from_env();
     /* Netplay: refresh RB bios/entry after savestate_configure (start() ran
      * earlier with zeros); guest also sandboxes .pst/.mcd under saves/netplay/. */
     psx_netplay_bind_guest_saves();
