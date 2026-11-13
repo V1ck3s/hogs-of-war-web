@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define WEB_MAX_W 1280
+#define WEB_MAX_W 3456   /* 32:9 at 4x: 853*4 */
 #define WEB_MAX_H 1024
 
 static uint32_t s_frames[2][WEB_MAX_W * WEB_MAX_H];
