@@ -4,11 +4,12 @@ export const BIT = {
   l2: 8, r2: 9, l1: 10, r1: 11, triangle: 12, circle: 13, cross: 14, square: 15,
 };
 
+// Labels follow the game's own "CONFIGURATION MANETTE" screen.
 export const ACTIONS = [
-  ['up', 'Haut'], ['down', 'Bas'], ['left', 'Gauche'], ['right', 'Droite'],
-  ['cross', 'Croix ✕ (valider / tirer)'], ['circle', 'Rond ○ (retour)'], ['square', 'Carré □'], ['triangle', 'Triangle △'],
-  ['l1', 'L1'], ['r1', 'R1'], ['l2', 'L2'], ['r2', 'R2'],
-  ['start', 'Start'], ['select', 'Select'],
+  ['up', 'Haut (se déplacer / viser)'], ['down', 'Bas (se déplacer / viser)'], ['left', 'Gauche (se déplacer / viser)'], ['right', 'Droite (se déplacer / viser)'],
+  ['cross', 'Action / tirer (✕)'], ['circle', 'Menu des armes (○)'], ['square', 'Sauter (□)'], ['triangle', 'Annuler (△)'],
+  ['l1', 'Caméra (L1)'], ['l2', 'Caméra (L2)'], ['r1', 'Viser — haut (R1)'], ['r2', 'Viser — bas (R2)'],
+  ['start', 'Pause (Start)'], ['select', 'Select'],
 ];
 
 // PC layout, by physical key position (event.code), so it is ZQSD on an

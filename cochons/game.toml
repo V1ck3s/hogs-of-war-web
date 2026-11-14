@@ -98,6 +98,204 @@ expected = "0x3C12FE00"      # lui s2,0xFE00
 replacement = "0x3C12FC50"   # lui s2,0xFC50
 overlay_only = true
 
+# Wide view cone (mods/plugins/view_cone.c): the battle module draws pigs,
+# props and ground only in the map cells listed by a 4:3-sized cone table
+# (0x80076700, 9 x 220 entries, 213 read, entry 212 = objects outside the
+# grid). Its four loops (objects x3 at 0x8005C510, ground at 0x8005EA74)
+# read a cone 8/3 as wide instead: 9 x 440 entries at 0x9F000000 (mod guest
+# memory), out-of-grid entry 439. Same tables for every screen shape.
+
+[[recompiler.patch]]
+id = "cone-1-base-hi"
+address = "0x8005C6B0"
+expected = "0x3C048007"
+replacement = "0x3C049F00"
+overlay_only = true
+note = "lui a0,0x8007 -> 0x9F00"
+
+[[recompiler.patch]]
+id = "cone-1-base-lo"
+address = "0x8005C6B4"
+expected = "0x24846700"
+replacement = "0x24840000"
+overlay_only = true
+note = "addiu a0,a0,0x6700 -> 0"
+
+[[recompiler.patch]]
+id = "cone-1-stride"
+address = "0x8005C6C4"
+expected = "0x000210C0"
+replacement = "0x00021100"
+overlay_only = true
+note = "sll v0,v0,3 -> 4 (440 -> 880 bytes per sub-table)"
+
+[[recompiler.patch]]
+id = "cone-1-outer"
+address = "0x8005C798"
+expected = "0x294200D4"
+replacement = "0x294201B7"
+overlay_only = true
+note = "slti v0,t2,212 -> 439 (out-of-grid list entry)"
+
+[[recompiler.patch]]
+id = "cone-1-count"
+address = "0x8005CA30"
+expected = "0x294200D5"
+replacement = "0x294201B8"
+overlay_only = true
+note = "slti v0,t2,213 -> 440"
+
+[[recompiler.patch]]
+id = "cone-2-base-hi"
+address = "0x8005CA40"
+expected = "0x3C028007"
+replacement = "0x3C029F00"
+overlay_only = true
+note = "lui v0,0x8007 -> 0x9F00"
+
+[[recompiler.patch]]
+id = "cone-2-base-lo"
+address = "0x8005CA44"
+expected = "0x24426700"
+replacement = "0x24420000"
+overlay_only = true
+note = "addiu v0,v0,0x6700 -> 0"
+
+[[recompiler.patch]]
+id = "cone-2-stride"
+address = "0x8005CA6C"
+expected = "0x000318C0"
+replacement = "0x00031900"
+overlay_only = true
+note = "sll v1,v1,3 -> 4"
+
+[[recompiler.patch]]
+id = "cone-2-outer"
+address = "0x8005CB14"
+expected = "0x29E200D4"
+replacement = "0x29E201B7"
+overlay_only = true
+note = "slti v0,t7,212 -> 439"
+
+[[recompiler.patch]]
+id = "cone-2-count"
+address = "0x8005CEEC"
+expected = "0x29E200D5"
+replacement = "0x29E201B8"
+overlay_only = true
+note = "slti v0,t7,213 -> 440"
+
+[[recompiler.patch]]
+id = "cone-3-base-hi"
+address = "0x8005CF20"
+expected = "0x3C198007"
+replacement = "0x3C199F00"
+overlay_only = true
+note = "lui t9,0x8007 -> 0x9F00"
+
+[[recompiler.patch]]
+id = "cone-3-base-lo"
+address = "0x8005CF24"
+expected = "0x27396700"
+replacement = "0x27390000"
+overlay_only = true
+note = "addiu t9,t9,0x6700 -> 0"
+
+[[recompiler.patch]]
+id = "cone-3-stride"
+address = "0x8005CF50"
+expected = "0x000210C0"
+replacement = "0x00021100"
+overlay_only = true
+note = "sll v0,v0,3 -> 4"
+
+[[recompiler.patch]]
+id = "cone-3-base1-hi"
+address = "0x8005CF5C"
+expected = "0x3C158007"
+replacement = "0x3C159F00"
+overlay_only = true
+note = "lui s5,0x8007 -> 0x9F00"
+
+[[recompiler.patch]]
+id = "cone-3-base1-lo"
+address = "0x8005CF60"
+expected = "0x26B56701"
+replacement = "0x26B50001"
+overlay_only = true
+note = "addiu s5,s5,0x6701 -> 1"
+
+[[recompiler.patch]]
+id = "cone-3-outer"
+address = "0x8005CFE4"
+expected = "0x2A4200D4"
+replacement = "0x2A4201B7"
+overlay_only = true
+note = "slti v0,s2,212 -> 439"
+
+[[recompiler.patch]]
+id = "cone-3-count"
+address = "0x8005D20C"
+expected = "0x2A4200D5"
+replacement = "0x2A4201B8"
+overlay_only = true
+note = "slti v0,s2,213 -> 440"
+
+[[recompiler.patch]]
+id = "cone-ground-base-hi"
+address = "0x8005EAAC"
+expected = "0x3C058007"
+replacement = "0x3C059F00"
+overlay_only = true
+note = "lui a1,0x8007 -> 0x9F00"
+
+[[recompiler.patch]]
+id = "cone-ground-base-lo"
+address = "0x8005EAB0"
+expected = "0x24A56700"
+replacement = "0x24A50000"
+overlay_only = true
+note = "addiu a1,a1,0x6700 -> 0"
+
+[[recompiler.patch]]
+id = "cone-ground-stride"
+address = "0x8005EAC0"
+expected = "0x000420C0"
+replacement = "0x00042100"
+overlay_only = true
+note = "sll a0,a0,3 -> 4"
+
+[[recompiler.patch]]
+id = "cone-ground-count"
+address = "0x8005EC3C"
+expected = "0x2AC200D4"
+replacement = "0x2AC201B7"
+overlay_only = true
+note = "slti v0,s6,212 -> 439 (cells only)"
+
+# Wide pig visibility: the actor cull (0x8004A618, runtime-loaded module) moves the pig
+# into camera space and drops it when |x| >= z*256/H + 256, i.e. outside the
+# 4:3 half-width (256 px of the 512-wide battle framebuffer), so pigs in the
+# extended sides of a wide view vanished. Quadruple that half-width (covers
+# 32:9) and scale the near-plane test with it (a3 < 129 -> a3 < 513: same
+# minimum depth). Same for every screen shape.
+
+[[recompiler.patch]]
+id = "wide-pig-cull-x"
+address = "0x8004A6F0"
+expected = "0x00031200"      # sll v0,v1,8   (z * 256)
+replacement = "0x00031280"   # sll v0,v1,10  (z * 1024)
+overlay_only = true
+note = "actor cull: horizontal half-width x4"
+
+[[recompiler.patch]]
+id = "wide-pig-cull-near"
+address = "0x8004A794"
+expected = "0x28E20081"      # slti v0,a3,129
+replacement = "0x28E20201"   # slti v0,a3,513
+overlay_only = true
+note = "actor cull: same near limit with the x4 half-width"
+
 [runtime]
 window_title = "Cochons de Guerre"
 memcard_dir = "saves"
@@ -120,6 +318,10 @@ entries = ["0x80040FE4", "0x80046E70", "0x80047A9C", "0x80047DB8", "0x80047F9C",
 # aspect from 4:3 to 21:9 by resizing the game window.
 [widescreen]
 native_wide = false
+# Native-wide (online): the battle sky is three full-width gradient bands,
+# the top one 58 px tall; stretch bands from 40 px up so the top corners of
+# a wide view are sky too (no black squares).
+nw_backdrop_min_height = 40
 gameplay_state_addr = "0x8002AA50"
 gameplay_state_values = ["0x80042768"]
 gte_game_mode = true
