@@ -13,6 +13,7 @@ uint32_t apply_one_recompiler_patch(const RecompilerPatch& patch,
                                     uint32_t address,
                                     uint32_t observed,
                                     bool overlay_mode) {
+    if (patch.overlay_only && !overlay_mode) return observed;
     if (observed == patch.expected) return patch.replacement;
     if (overlay_mode) return observed;
     throw std::runtime_error(fmt::format(

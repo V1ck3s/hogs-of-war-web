@@ -177,6 +177,7 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(recompiler_patch_address_key(patch.address));
         h.u32(patch.expected);
         h.u32(patch.replacement);
+        h.u32(patch.overlay_only ? 1u : 0u);
     }
 
     h.tag("load_charge_batch");
@@ -1466,6 +1467,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                 "recompiler.patch.replacement");
             if (item.contains("note")) {
                 patch.note = toml::find<std::string>(item, "note");
+            }
+            if (item.contains("overlay_only")) {
+                patch.overlay_only = toml::find<bool>(item, "overlay_only");
             }
 
             if (patch.id.empty()) {

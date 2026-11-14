@@ -19,6 +19,11 @@ struct RecompilerPatch {
     uint32_t expected = 0;
     uint32_t replacement = 0;
     std::string note;
+    /* Only code images loaded at run time (overlays). The boot executable's
+     * bytes at that address are something else: the site exists only once
+     * the overlay is loaded, so the executable is left alone instead of being
+     * reported as a wrong revision. */
+    bool overlay_only = false;
 };
 
 inline uint32_t recompiler_patch_address_key(uint32_t address) {
