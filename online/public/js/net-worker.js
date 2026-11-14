@@ -11,6 +11,7 @@ let lastHashFrame = -1;
 const hashes = new Map();   // frame -> my digest
 const pendingHashes = new Map(); // peers' digests for frames I have not reached
 let timer = 0;
+let lead = 0;
 
 function views() {
   // Shared memory may grow (new SharedArrayBuffer object, same bytes).
@@ -70,6 +71,7 @@ function loop() {
     postMessage({
       t: 'stats', frame: Atomics.load(mem.u32, status), waitMs: Atomics.load(mem.u32, status + 3),
       holder: Atomics.load(mem.u32, status + 4) - 1, team: Atomics.load(mem.u32, status + 5), waiting: ls.waitingOn(),
+      lead: ls.lead,
     });
   }
 }
@@ -80,6 +82,7 @@ onmessage = (e) => {
     case 'start':
       mem = { memory: m.memory, tags: m.tags, words: m.words, status: m.status, ring: m.ring, maxp: m.maxp, stride: m.stride };
       ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start || 0, host: m.host || 0 });
+      if (lead) ls.setLead(lead);
       if (m.start) clearTags();
       clearInterval(timer);
       timer = setInterval(loop, 2);
@@ -90,6 +93,7 @@ onmessage = (e) => {
       // the previous schedule (peers ahead of the snapshot rewind to it).
       ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start, host: m.host });
       for (const [i, after] of m.dropped || []) ls.drop(i, after);
+      if (lead) ls.setLead(lead);
       clearTags();
       hashes.clear(); pendingHashes.clear();
       // The game's last digest belongs to the old timeline (a peer ahead of
@@ -97,6 +101,10 @@ onmessage = (e) => {
       views();
       lastHashFrame = Atomics.load(mem.u32, (mem.status >> 2) + 6);
       postMessage({ t: 'resync-ready', start: m.start });
+      break;
+    case 'lead':
+      lead = m.n | 0;
+      if (ls) { ls.setLead(lead); tick(); }
       break;
     case 'mask':
       word = ~m.mask & NEUTRAL;

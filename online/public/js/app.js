@@ -99,10 +99,30 @@ function onMessage(m) {
       break;
     case 'hash': if (state.worker) state.worker.postMessage(m); break;
     case 'chat': chatLine(m.name, m.text); break;
-    case 'pong': sendWs({ t: 'rtt', rtt: performance.now() - m.ts }); state.rtt = performance.now() - m.ts; break;
+    case 'pong': {
+      const rtt = performance.now() - m.ts;
+      state.rtt = rtt;
+      (state.rtts ||= []).push(rtt);
+      if (state.rtts.length > 8) state.rtts.shift();
+      sendWs({ t: 'rtt', rtt: Math.max(...state.rtts) });
+      updateLead();
+      break;
+    }
+    case 'net': state.roomRtt = m.maxRtt; updateLead(); break;
     case 'error': toast(m.message, 6000); break;
     default:
   }
+}
+
+// Input lead: my words must reach the slowest peer before its game needs
+// them. Path me → server → peer ≈ half my round trip + half theirs; a game
+// frame lasts 20 ms (PAL vblank); two frames of margin for jitter.
+function updateLead() {
+  const mine = Math.max(0, ...(state.rtts || [0]));
+  const other = Math.max(mine, state.roomRtt || 0);
+  const n = Math.ceil((mine + other) / 2 / 20) + 2;
+  state.lead = n;
+  if (state.worker) state.worker.postMessage({ t: 'lead', n });
 }
 
 // ------------------------------------------------------------------ lobby / room
@@ -390,6 +410,7 @@ async function attach(Module, go) {
     players: go.players, me: state.id, delay: go.delay,
     start: go.snapshot ? go.f : 0, host: go.hostIndex | 0,
   });
+  if (state.lead) w.postMessage({ t: 'lead', n: state.lead });
   for (const q of state.inQueue || []) if (q.s === state.session) w.postMessage(q);
   state.inQueue = [];
   if (go.snapshot) {
@@ -438,7 +459,7 @@ function onStats(m) {
       : (holder ? `${holder} a la main` : '');
   $('#turn').classList.toggle('mine', !!(team && mine));
   const waiting = m.waiting.length ? ` · attente de ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
-  $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;
+  $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${m.lead ? ` · avance ${m.lead} images` : ''}${waiting}`;
 }
 
 function stopGame() {

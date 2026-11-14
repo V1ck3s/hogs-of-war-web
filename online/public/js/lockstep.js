@@ -28,6 +28,7 @@ export class Lockstep {
     this.host = host | 0;
     this.words = this.players.map(() => new Map());
     this.dropped = new Map();      // index -> last relayed frame
+    this.lead = this.delay;                      // how far ahead we send (>= delay)
     this.nextLocal = this.start + this.delay;   // next frame we owe the others
     this.nextPublish = this.start;               // next frame to hand to the game
   }
@@ -52,10 +53,15 @@ export class Lockstep {
 
   get isPlayer() { return this.me >= 0; }
 
-  /** Local words for frames [nextLocal, cur + delay]; returns a batch to send. */
+  /** Sends local input `n` frames ahead of the game (never less than the
+   * session delay). Purely local: a longer lead only makes our words arrive
+   * earlier; it hides a slow link at the cost of input latency. */
+  setLead(n) { this.lead = Math.max(this.delay, Math.min(60, n | 0)); }
+
+  /** Local words for frames [nextLocal, cur + lead]; returns a batch to send. */
   local(cur, word) {
     if (!this.isPlayer) return null;
-    const until = cur + this.delay;
+    const until = cur + this.lead;
     if (this.nextLocal > until) return null;
     const f = this.nextLocal;
     const w = [];

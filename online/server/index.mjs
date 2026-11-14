@@ -371,6 +371,14 @@ function onJson(c, m) {
       return;
     case 'rtt':
       c.rtt = Math.max(0, Math.min(5000, +m.rtt || 0));
+      if (r) {
+        // Everyone sends their inputs early enough for the slowest link.
+        const maxRtt = Math.max(...r.members.map((id) => clients.get(id)?.rtt | 0));
+        if (maxRtt !== r.maxRtt) {
+          r.maxRtt = maxRtt;
+          for (const id of r.members) send(clients.get(id), { t: 'net', maxRtt });
+        }
+      }
       return;
     default:
   }

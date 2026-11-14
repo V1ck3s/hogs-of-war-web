@@ -46,7 +46,8 @@ export class Display {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.texW = 1024; this.texH = 512;
-    this.copy = new Uint8Array(3456 * 1024 * 4);   // WebGL refuses shared views (max: 32:9 at 4x)
+    this.copy = new Uint8Array(1024 * 512 * 4);   // WebGL refuses shared views: frames are copied here
+    this.maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     const loop = () => { this.draw(); this.raf = requestAnimationFrame(loop); };
     this.raf = requestAnimationFrame(loop);
   }
@@ -61,6 +62,8 @@ export class Display {
     const [, idx, w, h, logicalW, dstW, dstH, contentH, nearest] = hdr;
     if (!w || !h) return;
     const n = w * h * 4;
+    if (w > this.maxTex || h > this.maxTex) return;
+    if (this.copy.length < n) this.copy = new Uint8Array(n);
     this.copy.set(new Uint8Array(buf, this.bufPtr(idx), n));
     if (Atomics.load(hdr, 0) !== s0) return;   // overwritten while copying: next frame
     this.seq = s0;
