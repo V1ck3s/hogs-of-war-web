@@ -53,6 +53,9 @@ static int       g_scale   = 1;
 static int       g_hr_w    = VRAM_WIDTH;
 static int       g_hr_h    = VRAM_HEIGHT;
 static int       g_precise_valid = 0;
+/* Presentation-only frame skip (threaded backend's presentation instance):
+ * primitives update native VRAM only, not the hi-res mirror / wide surfaces. */
+static int       g_present_skip = 0;
 static int32_t   g_precise_x16[3], g_precise_y16[3];
 static int       g_perspective_valid = 0;
 static float     g_perspective_q[3];
@@ -506,6 +509,8 @@ void sw_renderer_set_scale(int scale) {
 
 int sw_renderer_scale(void) { return g_scale; }
 
+void sw_set_present_skip(int on) { g_present_skip = on ? 1 : 0; }
+
 void sw_set_precise_triangle(int enabled,
                              int32_t x0, int32_t y0,
                              int32_t x1, int32_t y1,
@@ -745,7 +750,7 @@ void sw_draw_flat_triangle(int x0, int y0, int x1, int y1,
                            int x2, int y2, uint16_t color) {
     RTarget n = rt_native();
     raster_flat_triangle(&n, x0, y0, x1, y1, x2, y2, color);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         raster_flat_triangle(&hr,
@@ -753,7 +758,7 @@ void sw_draw_flat_triangle(int x0, int y0, int x1, int y1,
             precise_scaled(0,1,x1,s), precise_scaled(1,1,y1,s),
             precise_scaled(0,2,x2,s), precise_scaled(1,2,y2,s), color);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         WideBd bd = wide_bd_get();
@@ -866,7 +871,7 @@ void sw_draw_gouraud_triangle(int x0, int y0, uint16_t c0,
                               int x2, int y2, uint16_t c2) {
     RTarget n = rt_native();
     raster_gouraud_triangle(&n, x0, y0, c0, x1, y1, c1, x2, y2, c2);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         raster_gouraud_triangle(&hr,
@@ -874,7 +879,7 @@ void sw_draw_gouraud_triangle(int x0, int y0, uint16_t c0,
             precise_scaled(0,1,x1,s), precise_scaled(1,1,y1,s), c1,
             precise_scaled(0,2,x2,s), precise_scaled(1,2,y2,s), c2);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         WideBd bd = wide_bd_get();
@@ -1021,7 +1026,7 @@ void sw_draw_textured_triangle(int x0, int y0, int u0, int v0,
                              x2, y2, u2, v2, clut_x, clut_y, texpage,
                              g_perspective_valid,
                              g_perspective_q[0], g_perspective_q[1], g_perspective_q[2]);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         raster_textured_triangle(&hr,
@@ -1031,7 +1036,7 @@ void sw_draw_textured_triangle(int x0, int y0, int u0, int v0,
                                  clut_x, clut_y, texpage, g_perspective_valid,
                                  g_perspective_q[0], g_perspective_q[1], g_perspective_q[2]);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         WideBd bd = wide_bd_get();
@@ -1216,7 +1221,7 @@ void sw_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0,
         x2, y2, u2, v2, r2, g2, b2,
         clut_x, clut_y, texpage, raw_texture, g_perspective_valid,
         g_perspective_q[0], g_perspective_q[1], g_perspective_q[2]);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         raster_shaded_textured_triangle(&hr,
@@ -1226,7 +1231,7 @@ void sw_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0,
             clut_x, clut_y, texpage, raw_texture, g_perspective_valid,
             g_perspective_q[0], g_perspective_q[1], g_perspective_q[2]);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         WideBd bd = wide_bd_get();
@@ -1262,12 +1267,12 @@ static void raster_flat_rect(const RTarget *t, int x, int y, int w, int h,
 void sw_draw_flat_rect(int x, int y, int w, int h, uint16_t color) {
     RTarget n = rt_native();
     raster_flat_rect(&n, x, y, w, h, color);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         raster_flat_rect(&hr, x*s, y*s, w*s, h*s, color);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         /* Full-screen 2D overlay (pause gray-filter / load fade): a flat rect
@@ -1335,12 +1340,12 @@ void sw_draw_textured_rect(int x, int y, int w, int h,
     if (g_texture_filter) sw_rect_uv_limits(u, v, u + w, v + h);
     RTarget n = rt_native();
     raster_textured_rect(&n, x, y, w, h, u, v, clut_x, clut_y, texpage);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         raster_textured_rect(&hr, x*s, y*s, w*s, h*s, u, v, clut_x, clut_y, texpage);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         WideBd bd = wide_bd_get();
@@ -1429,7 +1434,7 @@ void sw_draw_textured_rect_scaled(int x, int y, int w, int h,
     RTarget n = rt_native();
     raster_textured_rect_scaled(&n, x, y, w, h, u0, v0, u1, v1,
                                 clut_x, clut_y, texpage);
-    if (g_hr) {
+    if (g_hr && !g_present_skip) {
         int s = g_scale;
         RTarget hr = rt_hires();
         /* Footprint scales by s; the destination span widens so the texel
@@ -1437,7 +1442,7 @@ void sw_draw_textured_rect_scaled(int x, int y, int w, int h,
         raster_textured_rect_scaled(&hr, x*s, y*s, w*s, h*s, u0, v0, u1, v1,
                                     clut_x, clut_y, texpage);
     }
-    if (g_wide_cur) {
+    if (g_wide_cur && !g_present_skip) {
         int s = g_scale, dx = wide_dx();
         RTarget wt = rt_wide();
         WideBd bd = wide_bd_get();
@@ -1456,6 +1461,7 @@ void sw_draw_textured_rect_scaled(int x, int y, int w, int h,
 /* ------------------------------------------------------------------ */
 
 static inline void hr_put_block_opaque(int nx, int ny, uint16_t color) {
+    if (g_present_skip) return;
     int s = g_scale;
     RTarget hr = rt_hires();
     int bx = nx * s, by = ny * s;

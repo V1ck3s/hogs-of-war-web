@@ -110,6 +110,8 @@ void gr_set_draw_offset(int x, int y);
  * backend implements it; if not, the others are no-ops and the caller keeps
  * the canonical present path. */
 int  gr_wide_supported(void);
+/* The CPU VRAM array was replaced wholesale (savestate load). */
+void gr_vram_restored(void);
 void gr_wide_configure(int wide_w, int offset);
 void gr_wide_set_target(int base_x);
 void gr_wide_disable_target(void);
@@ -199,6 +201,9 @@ typedef struct GpuRenderBackend {
      * pixel count, writes width/height to ow/oh. NULL if unsupported. */
     int  (*wide_dump_full)(uint32_t *out, int cap_pixels, int *ow, int *oh,
                            int base_x);
+    /* Optional: the CPU VRAM array was replaced wholesale (savestate load);
+     * backends keeping their own copy resynchronize from it. */
+    void (*vram_restored)(void);
 } GpuRenderBackend;
 
 #ifdef __cplusplus

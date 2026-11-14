@@ -609,7 +609,9 @@ if(EMSCRIPTEN)
         ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat_web.c
         ${PSXRECOMP_ROOT}/runtime/src/web_audio_bridge.c
         ${PSXRECOMP_ROOT}/runtime/src/psx_lockstep_web.c
-        ${PSXRECOMP_ROOT}/runtime/src/web_present.c)
+        ${PSXRECOMP_ROOT}/runtime/src/web_present.c
+        ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer_hr.c
+        ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_threaded.c)
 endif()
 
 set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
@@ -1790,7 +1792,7 @@ function(psxrecomp_add_runtime_target target)
             "--use-port=sdl2"
             "-pthread"
             "-sPROXY_TO_PTHREAD=1"
-            "-sPTHREAD_POOL_SIZE=2"
+            "-sPTHREAD_POOL_SIZE=3"
             "-sALLOW_MEMORY_GROWTH=1"
             "-sINITIAL_MEMORY=402653184"
             "-sMAXIMUM_MEMORY=1073741824"

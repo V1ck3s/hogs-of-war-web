@@ -364,6 +364,10 @@ static PSXModWorldScenePredicate s_ws_world_scene_predicate;
 void psx_mod_set_world_scene_predicate(PSXModWorldScenePredicate predicate) {
     s_ws_world_scene_predicate = predicate;
 }
+static PSXModWorldScenePredicate s_ws_native43_predicate;
+void psx_mod_set_native_43_predicate(PSXModWorldScenePredicate predicate) {
+    s_ws_native43_predicate = predicate;
+}
 static int ws_mod_world_scene(void) {
     return ws_mode == 2 && s_ws_world_scene_predicate && s_ws_world_scene_predicate();
 }
@@ -438,6 +442,7 @@ void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate
 
 int gpu_ws_present_native_43(void) {
     if (!ws_engaged()) return 0;
+    if (ws_mode == 2 && s_ws_native43_predicate && s_ws_native43_predicate()) return 1;
     int game_mode = ws_game_mode();
     if (!game_mode) ws_scene_latch.confirmed = 0;
     int native_43 = !game_mode || ws_2d_only_scene();
@@ -6677,6 +6682,7 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
      * on a stale draw area after savestate load. */
     gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
                      (int)draw_area_right, (int)draw_area_bottom);
+    gr_vram_restored();
     ws_nw_sync_target();
     return 1;
 }

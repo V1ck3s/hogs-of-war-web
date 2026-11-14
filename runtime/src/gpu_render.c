@@ -12,6 +12,7 @@
 
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
+#include <stdlib.h>
 #include <stdio.h>
 
 static const GpuRenderBackend SW_BACKEND = {
@@ -87,6 +88,20 @@ void gr_set_backend(GrBackend backend) {
         fprintf(stdout, "psxrecomp: renderer = vulkan requested but unavailable "
                         "— falling back to software\n");
     }
+#if defined(PSX_WEB)
+    /* Browser: rasterize the presentation copies (supersampled, native-wide)
+     * on their own thread; the emulation thread keeps the 1x native VRAM.
+     * PSX_SW_THREADED=0 keeps everything on the emulation thread. */
+    {
+        extern const GpuRenderBackend SWT_BACKEND;
+        const char *e = getenv("PSX_SW_THREADED");
+        if (!e || e[0] != '0') {
+            g_b = &SWT_BACKEND;
+            g_effective = GR_BACKEND_SOFTWARE;
+            return;
+        }
+    }
+#endif
     g_b = &SW_BACKEND;
     g_effective = GR_BACKEND_SOFTWARE;
 }
@@ -164,6 +179,7 @@ void gr_set_draw_offset(int x, int y)                { g_b->set_draw_offset(x, y
 
 /* Native-wide compositor — present only on backends that supply it. */
 int  gr_wide_supported(void) { return g_b->render_wide_display != 0; }
+void gr_vram_restored(void) { if (g_b->vram_restored) g_b->vram_restored(); }
 void gr_wide_configure(int wide_w, int offset) {
     if (g_b->wide_configure) g_b->wide_configure(wide_w, offset);
 }

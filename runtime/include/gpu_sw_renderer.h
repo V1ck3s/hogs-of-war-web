@@ -21,6 +21,9 @@ void sw_renderer_init(uint16_t* vram);
  * Must be called once after sw_renderer_init, before drawing begins. */
 void sw_renderer_set_scale(int scale);
 int  sw_renderer_scale(void);
+/* Presentation copies only: while on, primitives update native VRAM but not
+ * the hi-res mirror / native-wide surfaces (a skipped, never shown frame). */
+void sw_set_present_skip(int on);
 
 /* Visual-only high-resolution vertex override for the next triangle. Values
  * are signed 16.16 screen coordinates; native VRAM still uses the integer GP0

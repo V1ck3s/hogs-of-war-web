@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define WEB_MAX_W 3456   /* 32:9 at 4x: 853*4 */
+#define WEB_MAX_W 5464   /* 32:9 at 4x of a 512-wide framebuffer: 1366*4 */
 #define WEB_MAX_H 1024
 
 static uint32_t s_frames[2][WEB_MAX_W * WEB_MAX_H];
@@ -21,13 +21,19 @@ static volatile uint32_t s_hdr[16];
 EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_frame_header(void) { return (uintptr_t)s_hdr; }
 EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_frame_buffer(int i) { return (uintptr_t)s_frames[i & 1]; }
 
-void psx_web_publish_frame(const uint32_t *px, int w, int h, int logical_w,
-                           int dst_w, int dst_h, int content_h, int nearest) {
-    if (!px || w <= 0 || h <= 0) return;
-    if (w > WEB_MAX_W) w = WEB_MAX_W;
-    if (h > WEB_MAX_H) h = WEB_MAX_H;
+/* Threaded software backend (gpu_sw_threaded.c): the presentation thread
+ * writes the picture straight into the back buffer, then commits it. */
+int swt_publish(const uint32_t *px, int w, int h, int logical_w, int dst_w,
+                int dst_h, int content_h, int nearest) __attribute__((weak));
+
+uint32_t *psx_web_back_buffer(size_t *cap_pixels) {
+    if (cap_pixels) *cap_pixels = (size_t)WEB_MAX_W * WEB_MAX_H;
+    return s_frames[s_hdr[1] ^ 1u];
+}
+
+void psx_web_commit_frame(int w, int h, int logical_w, int dst_w, int dst_h,
+                          int content_h, int nearest) {
     const uint32_t back = s_hdr[1] ^ 1u;
-    memcpy(s_frames[back], px, (size_t)w * (size_t)h * 4u);
     __atomic_add_fetch(&s_hdr[0], 1u, __ATOMIC_SEQ_CST);   /* odd: updating */
     s_hdr[1] = back;
     s_hdr[2] = (uint32_t)w;
@@ -38,4 +44,15 @@ void psx_web_publish_frame(const uint32_t *px, int w, int h, int logical_w,
     s_hdr[7] = (uint32_t)content_h;
     s_hdr[8] = (uint32_t)nearest;
     __atomic_add_fetch(&s_hdr[0], 1u, __ATOMIC_SEQ_CST);   /* even: published */
+}
+
+void psx_web_publish_frame(const uint32_t *px, int w, int h, int logical_w,
+                           int dst_w, int dst_h, int content_h, int nearest) {
+    if (!px || w <= 0 || h <= 0) return;
+    if (w > WEB_MAX_W) w = WEB_MAX_W;
+    if (h > WEB_MAX_H) h = WEB_MAX_H;
+    if (swt_publish && swt_publish(px, w, h, logical_w, dst_w, dst_h, content_h, nearest))
+        return;
+    memcpy(psx_web_back_buffer(NULL), px, (size_t)w * (size_t)h * 4u);
+    psx_web_commit_frame(w, h, logical_w, dst_w, dst_h, content_h, nearest);
 }
