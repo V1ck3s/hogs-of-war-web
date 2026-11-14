@@ -1517,6 +1517,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool ws_clear_reveal = false;
     bool ws_nw_flat_backdrop = false;
     bool ws_nw_phase_backdrop = false;
+    int ws_nw_backdrop_min_height = 64;
     bool ws_nw_textured_edges = false;
     int ws_nw_textured_edge_scale = 0;
     bool ws_nw_full_mirror = false;
@@ -1702,6 +1703,13 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
         if (ws.contains("nw_backdrop"))
             ws_nw_backdrop = toml::find<bool>(ws, "nw_backdrop");
+        if (ws.contains("nw_backdrop_min_height")) {
+            ws_nw_backdrop_min_height = toml::find<int>(ws, "nw_backdrop_min_height");
+            if (ws_nw_backdrop_min_height < 8 || ws_nw_backdrop_min_height > 480)
+                throw std::runtime_error(fmt::format(
+                    "{}: [widescreen] nw_backdrop_min_height must be 8..480",
+                    config_path.string()));
+        }
         if (ws.contains("clear_reveal"))
             ws_clear_reveal = toml::find<bool>(ws, "clear_reveal");
         if (ws.contains("nw_flat_backdrop"))
@@ -2268,6 +2276,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_nw_left_hud_packet_lo*/ ws_nw_left_hud_packet_lo,
         /*ws_nw_left_hud_packet_hi*/ ws_nw_left_hud_packet_hi,
         /*ws_nw_backdrop*/        ws_nw_backdrop,
+        /*ws_nw_backdrop_min_height*/ ws_nw_backdrop_min_height,
         /*ws_clear_reveal*/       ws_clear_reveal,
         /*ws_nw_flat_backdrop*/   ws_nw_flat_backdrop,
         /*ws_nw_phase_backdrop*/  ws_nw_phase_backdrop,

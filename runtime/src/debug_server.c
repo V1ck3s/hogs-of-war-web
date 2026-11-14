@@ -6383,15 +6383,19 @@ static void handle_gte_state(int id, const char *json)
 }
 
 /* Dump recent GTE RTPS/RTPT projections (inputs + outputs) from the always-on
- * GTE ring. {"cmd":"gte_ring_dump","count":N,"newest":1,"frame":F} — frame
- * optional (omit or -1 for all). Used to find flattened/degenerate character
+ * GTE ring. {"cmd":"gte_ring_dump","count":N,"newest":1,"frame":F,"offset":K} —
+ * frame optional (omit or -1 for all); offset skips K matching entries so a
+ * whole frame can be paged through. Used to find flattened/degenerate character
  * projections and split game-code input bugs from GTE-math bugs. */
 static void handle_gte_ring_dump(int id, const char *json)
 {
     extern unsigned long long gte_rtp_ring_total(void);
     extern int gte_rtp_ring_dump_json(char *out, int outsz, int max_count,
-                                      int newest_first, long frame_filter);
+                                      int newest_first, long frame_filter,
+                                      int offset);
     int count = json_get_int(json, "count", 64);
+    int offset = json_get_int(json, "offset", 0);   /* pages through a frame */
+    if (offset < 0) offset = 0;
     if (count < 1) count = 1;
     if (count > 512) count = 512;
     int newest = json_get_int(json, "newest", 1) != 0;
@@ -6401,7 +6405,7 @@ static void handle_gte_ring_dump(int id, const char *json)
     char *entries = (char *)malloc(BUF_SZ);
     char *reply   = (char *)malloc(BUF_SZ + 256u);
     if (!entries || !reply) { free(entries); free(reply); send_err(id, "oom"); return; }
-    int n = gte_rtp_ring_dump_json(entries, (int)BUF_SZ, count, newest, frame);
+    int n = gte_rtp_ring_dump_json(entries, (int)BUF_SZ, count, newest, frame, offset);
     snprintf(reply, BUF_SZ + 256u,
              "{\"id\":%d,\"ok\":true,\"total\":%llu,\"emitted\":%d,\"entries\":[%s]}",
              id, gte_rtp_ring_total(), n, entries);

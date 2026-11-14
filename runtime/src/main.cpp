@@ -12977,6 +12977,7 @@ int main(int argc, char** argv) {
                                                 gc.ws_nw_left_hud_packet_hi);
             /* [widescreen] nw_backdrop — stretch full-frame 2D sky backdrop. */
             gpu_ws_set_nw_backdrop(gc.ws_nw_backdrop ? 1 : 0);
+            gpu_ws_set_nw_backdrop_min_height(gc.ws_nw_backdrop_min_height);
             /* [widescreen] nw_flat_backdrop — stretch flat sky/backdrop prims
              * in the native-wide mirror, preserving the canonical 4:3 image. */
             gpu_ws_set_nw_flat_backdrop(gc.ws_nw_flat_backdrop ? 1 : 0);

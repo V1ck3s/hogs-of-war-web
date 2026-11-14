@@ -750,7 +750,8 @@ extern "C" int gte_latch_dump_json(char* out, int outsz, int max_count) {
 /* Format up to max_count recent entries as a JSON array body (no outer braces).
  * If frame_filter >= 0, only entries with that frame are emitted. Returns count. */
 extern "C" int gte_rtp_ring_dump_json(char* out, int outsz, int max_count,
-                                      int newest_first, long frame_filter) {
+                                      int newest_first, long frame_filter,
+                                      int offset) {
     if (!s_gte_rtp_ring || outsz < 64) { if (out && outsz) out[0]=0; return 0; }
     uint64_t total = s_gte_rtp_seq;
     if (total == 0) { out[0]=0; return 0; }
@@ -761,6 +762,7 @@ extern "C" int gte_rtp_ring_dump_json(char* out, int outsz, int max_count,
         if (seq < oldest || seq >= total) break;
         const GteRtpRec* e = &s_gte_rtp_ring[seq % GTE_RTP_RING_CAP];
         if (frame_filter >= 0 && e->frame != (uint32_t)frame_filter) continue;
+        if (offset > 0) { offset--; continue; }
         auto sxx = [](int32_t p){ int v=p&0xFFFF; return v>=0x8000? v-0x10000:v; };
         auto syy = [](int32_t p){ int v=(p>>16)&0xFFFF; return v>=0x8000? v-0x10000:v; };
         if (pos > outsz - 700) break;

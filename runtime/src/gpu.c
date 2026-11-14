@@ -2764,6 +2764,8 @@ static void ws_nw_hud_shift_vertices(int32_t *vx, int count) {
  * Transforms vx[0..3] IN PLACE (pre-draw_offset); returns 1 if it applied. */
 static int ws_nw_backdrop = 0;
 void gpu_ws_set_nw_backdrop(int on) { ws_nw_backdrop = on ? 1 : 0; }
+static int32_t ws_nw_backdrop_min_h = 64;
+void gpu_ws_set_nw_backdrop_min_height(int h) { ws_nw_backdrop_min_h = h > 0 ? h : 64; }
 static int ws_nw_flat_backdrop = 0;
 void gpu_ws_set_nw_flat_backdrop(int on) { ws_nw_flat_backdrop = on ? 1 : 0; }
 int gpu_ws_nw_flat_backdrop_enabled(void) { return ws_nw_flat_backdrop; }
@@ -2782,7 +2784,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
         if (vy[i] > maxy) maxy = vy[i];
     }
     /* Must span the full display width and a real vertical extent. */
-    if (minx > X + EDGE || maxx < X + W - EDGE || (maxy - miny) < 64) return 0;
+    if (minx > X + EDGE || maxx < X + W - EDGE || (maxy - miny) < ws_nw_backdrop_min_h) return 0;
     /* Axis-aligned: every vertex X sits at either the min or the max edge, and
      * every Y at the top or bottom edge (a true screen-space rectangle). */
     for (int i = 0; i < 4; i++) {

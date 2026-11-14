@@ -1081,6 +1081,10 @@ struct GameConfig {
     // fill the wide frame, so it stops pillarboxing at the reveal margins.
     // Runtime-only — no regen. Off by default.
     bool ws_nw_backdrop = false;
+    // [widescreen] nw_backdrop_min_height — smallest height (display pixels)
+    // of a full-width quad that nw_backdrop stretches. Default 64; a game whose
+    // sky is cut into thinner full-width bands lowers it. Runtime-only.
+    int ws_nw_backdrop_min_height = 64;
 
     // [widescreen] clear_reveal — opt a title into synthetic native-wide margin
     // cleanup. A game-specific stage/map boundary can clear only proven-void

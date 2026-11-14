@@ -403,6 +403,8 @@ void gpu_ws_restore_linked_list_rank(uint32_t rank);
  * gradient / backdrop image) to fill the wide frame, so it no longer
  * pillarboxes at the reveal margins. Runtime-only. Off by default. */
 void gpu_ws_set_nw_backdrop(int on);
+/* Smallest height of a full-width quad the stretch applies to (default 64). */
+void gpu_ws_set_nw_backdrop_min_height(int h);
 /* Native-wide flat-polygon backdrop stretch ([widescreen] nw_flat_backdrop):
  * stretch untextured primitives in the wide mirror without changing the
  * canonical 4:3 framebuffer. Intended for flat-colour sky/water backdrops. */
