@@ -36,7 +36,8 @@ target_sources(psx-runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/ntsc_60hz.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/busy_waits.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/widescreen.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/terrain_line.c")
+    "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/terrain_line.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mods/plugins/direct_start.c")
 
 foreach(_PSX_RUNTIME_CONFIG game.toml)
     add_custom_command(TARGET psx-runtime POST_BUILD

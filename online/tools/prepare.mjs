@@ -44,7 +44,12 @@ function addTree(srcDir, destDir) {
     else if (e.isFile() || e.isSymbolicLink()) add(d, fs.readFileSync(s));
   }
 }
-add('game.toml', fs.readFileSync(path.join(BUILD, 'game.toml')));
+// Online: native-wide widescreen. The world is projected exactly as in 4:3
+// and only drawn wider (the battle module's terrain cull is widened by the
+// game.toml patches for every view), so each player may use their own
+// screen shape without changing the simulation.
+add('game.toml', Buffer.from(fs.readFileSync(path.join(BUILD, 'game.toml'), 'utf8')
+  .replace(/^native_wide = false$/m, 'native_wide = true')));
 add('psx_game_version.txt', fs.readFileSync(path.join(BUILD, 'psx_game_version.txt')));
 addTree(path.join(BUILD, 'mods/bundled'), 'mods/bundled');
 addTree(path.join(BUILD, 'bios'), 'bios');
@@ -56,14 +61,17 @@ add('mods/state.toml', Buffer.from([
   '[[package]]', 'id = "psx.enhancement.cpu-overclock"', '',
   '[[package]]', 'id = "frontschweine.enhancement.ntsc-60hz"', '',
   '[[package]]', 'id = "frontschweine.presentation.widescreen"', '',
+  '[[package]]', 'id = "frontschweine.online.direct-start"', '',
+  // The game boots straight into the room's mode (direct_start.c).
+  '[[feature]]', 'package_id = "frontschweine.online.direct-start"', 'id = "direct-start"',
+  'enabled = true', '',
   // Stock CPU speed (the default 200 % doubles the work per frame); the
   // feature stays on for its busy-wait shortcuts.
   '[[feature]]', 'package_id = "psx.enhancement.cpu-overclock"', 'id = "cpu-overclock"',
   'enabled = true', '[feature.values]', 'percent = "100"', '',
   '[[feature]]', 'package_id = "frontschweine.enhancement.ntsc-60hz"', 'id = "ntsc-60hz"',
   'enabled = false', '',
-  // Fixed field of view, the session's aspect (the page fills it in): the
-  // projection is part of the simulation, so it must not follow each window.
+  // The player's own aspect (the page fills it in).
   '[[feature]]', 'package_id = "frontschweine.presentation.widescreen"', 'id = "widescreen"',
   'enabled = true', '[feature.values]', 'aspect = "16:9"', '',
 ].join('\n')));

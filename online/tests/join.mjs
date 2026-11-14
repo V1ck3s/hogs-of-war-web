@@ -1,5 +1,7 @@
-// Multiplayer mode end to end, two browsers:
-//   - the menus lead by themselves to "SELECTION NIVEAU MULTIJOUEUR";
+// Multiplayer mode end to end, two browsers with different screen shapes
+// (Alice 16:9, Bruno 32:9):
+//   - the game boots straight into "SELECTION NIVEAU MULTIJOUEUR" (no logo,
+//     title or main menu ever shown);
 //   - each player, and only them, sets up their own team;
 //   - in battle, Bruno leaves, then comes back: every copy reloads the same
 //     snapshot and the game goes on with Bruno in his seat, copies identical.
@@ -22,7 +24,7 @@ let failures = 0;
 const check = (c, m) => { console.log((c ? 'OK   ' : 'FAIL ') + m); if (!c) failures++; };
 
 let roomCode = '';
-async function browser(name, q) {
+async function browser(name, q, aspect) {
   const b = await puppeteer.launch({
     executablePath: process.env.CHROME || '/usr/bin/chromium', headless: true, protocolTimeout: 900000,
     args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
@@ -32,6 +34,7 @@ async function browser(name, q) {
   page.on('console', (m) => { const t = m.text(); if (/désynchro|error|snapshot|savestate: (LOAD|SAVE)/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
   await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
   await page.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
   return { b, page, name };
@@ -43,11 +46,11 @@ const info = (p) => p.evaluate(() => {
     hashOk: s.hashOk || 0, desyncs: s.desyncs || 0 };
 });
 
-const host = await browser('Alice', 1);
+const host = await browser('Alice', 1, '16:9');
 await host.page.click('#btn-create');
 await host.page.waitForSelector('#room:not([hidden])');
 roomCode = await host.page.$eval('#room-code2', (e) => e.textContent);
-let guest = await browser('Bruno', 1);
+let guest = await browser('Bruno', 1, '32:9');
 await guest.page.click('#btn-join');
 await guest.page.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2, { timeout: 30000 });
 await host.page.click('#btn-start');
@@ -63,11 +66,21 @@ async function tap(p, key, frames = 6) {
   await p.keyboard.up(key);
 }
 
-// Nobody touches anything: the menus must reach the multiplayer level select.
-await untilFrame(1300);
+// Nobody touches anything: the first picture shown is the level select.
+const MENU_PTR = 0x800858A4, LEVEL = 0x800E4BA0;
+const seen = new Set();
+for (;;) {
+  const v = await host.page.evaluate((a) => ({ m: window.__cdg.peek(a), f: (window.__cdg.state.lastStats || {}).frame || 0 }), MENU_PTR);
+  if (v.m) seen.add(v.m.toString(16));
+  if (v.m === LEVEL) break;
+  if (v.f > 6000) break;
+  await sleep(100);
+}
+check([...seen].every((m) => m === LEVEL.toString(16)), `aucun autre menu avant la sélection de niveau (menus vus : ${[...seen].join(', ')})`);
+await untilFrame((await frameOf()) + 60);
 await host.page.screenshot({ path: path.join(out, '1_niveau_alice.png') });
 await guest.page.screenshot({ path: path.join(out, '1_niveau_bruno.png') });
-console.log('      menus parcourus seuls jusqu’à l’image', await frameOf(), '(capture 1_niveau_*)');
+console.log('      sélection de niveau atteinte à l’image', await frameOf(), '(capture 1_niveau_*)');
 
 // Back is refused on that screen.
 await tap(host.page, 'Backspace', 10); await tap(host.page, 'KeyR', 10);
@@ -113,7 +126,7 @@ const a2 = await info(host.page);
 check(a2.frame > a.frame + 200, `Alice continue seule (image ${a2.frame})`);
 
 // ...and comes back.
-guest = await browser('Bruno', 1);
+guest = await browser('Bruno', 1, '32:9');
 await guest.page.click('#btn-join');
 await guest.page.waitForFunction(() => document.querySelector('#splash').hidden, { timeout: 180000 });
 const t0 = Date.now();

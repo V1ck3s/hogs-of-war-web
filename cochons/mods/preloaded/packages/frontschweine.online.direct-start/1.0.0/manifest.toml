@@ -1,0 +1,22 @@
+format_version = 5
+id = "frontschweine.online.direct-start"
+version = "1.0.0"
+name = "Online Direct Start"
+author = "FrontschweineRecomp"
+description = "For online sessions: the game boots straight into the room's mode (multiplayer level select with one team per player, or the single-player menu), without logos, title or main menu."
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLES-02766"
+
+[[feature]]
+id = "direct-start"
+name = "Online Direct Start"
+description = "Skips the logo videos and the title, and opens the session's mode screen instead of the main menu (settings from the online page)."
+group = "Online"
+default_enabled = false
+
+[[plugin]]
+feature = "direct-start"
+id = "frontschweine.direct-start"

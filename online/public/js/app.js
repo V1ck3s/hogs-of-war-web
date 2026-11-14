@@ -120,7 +120,9 @@ $('#btn-copy').onclick = copyInvite;
 $('#btn-copy2').onclick = copyInvite;
 $('#btn-leave2').onclick = leave;
 $('#btn-leave').onclick = leave;
-$('#btn-start').onclick = () => sendWs({ t: 'start', aspect: chosenAspect() });
+$('#btn-start').onclick = () => sendWs({ t: 'start' });
+try { const a = localStorage.getItem('cdg.online.aspect'); if (a) $('#aspect').value = a; } catch { /* ignore */ }
+$('#aspect').onchange = () => { try { localStorage.setItem('cdg.online.aspect', $('#aspect').value); } catch { /* ignore */ } };
 $('#mode').onchange = $('#cpus').onchange = () => sendWs({ t: 'mode', mode: $('#mode').value, cpus: +$('#cpus').value });
 
 // Open rooms, refreshed while the lobby is on screen.
@@ -236,7 +238,9 @@ async function startGame(go) {
   state.players = go.players;
   let pre;
   try { pre = await preload; } catch (e) { $('#splash-text').textContent = e.message; return; }
-  const aspect = aspectRatioText(go.aspect || 16 / 9);
+  // Each player's own picture shape: the game runs native-wide (the world is
+  // simulated the same whatever the view), so peers may differ.
+  const aspect = aspectRatioText(chosenAspect());
   const Module = {
     canvas: $('#sdl'),   // SDL's own surface stays hidden; Display draws the game
     arguments: [],
@@ -273,6 +277,7 @@ async function startGame(go) {
         // The host drives the menus (spectating host: first player).
         PSX_WEB_LOCKSTEP_HOST: String(Math.max(0, go.players.indexOf(go.host))),
         PSX_WEB_MODE: go.mode || 'multi',
+        PSX_WEB_PLAYERS: String(go.players.length),
         PSX_WEB_CPUS: String(go.cpus | 0),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
@@ -342,6 +347,23 @@ function onSnapshot(buf) {
   }
 }
 
+// The game boots straight into the mode's screen (direct_start.c); the few
+// seconds it spends loading that screen's data stay behind the splash. A
+// player joining a running game sees it once the snapshot is loaded.
+const MENU_PTR = 0x800858A4, HOME_SCREEN = { multi: 0x800E4BA0, solo: 0x800E47B0 };
+function revealWhenReady(Module, go) {
+  $('#splash-text').textContent = 'Préparation de la partie…';
+  const t0 = performance.now();
+  const target = HOME_SCREEN[go.mode || 'multi'];
+  const check = () => {
+    const f = (state.lastStats || {}).frame || 0;
+    const ready = go.snapshot ? f > go.f + 1 : (Module._psx_web_peek32(MENU_PTR) >>> 0) === target;
+    if (ready || performance.now() - t0 > 90000) { $('#splash').hidden = true; return; }
+    setTimeout(check, 100);
+  };
+  check();
+}
+
 async function attach(Module, go) {
   const memory = Module.wasmMemory;
   // Lockstep worker: writes every participant's inputs into the game's ring.
@@ -397,7 +419,7 @@ async function attach(Module, go) {
     const b0 = Module._psx_web_frame_buffer(0), b1 = Module._psx_web_frame_buffer(1);
     state.display = new Display($('#canvas'), memory, Module._psx_web_frame_header(), (i) => (i ? b1 : b0));
   } catch (e) { toast(`Affichage impossible : ${e.message}`, 10000); }
-  $('#splash').hidden = true;
+  revealWhenReady(Module, go);
   canvas_focus();
 }
 
@@ -413,7 +435,7 @@ function onStats(m) {
     ? (mine ? `Réglez votre équipe (équipe ${team})` : `${holder || '?'} règle son équipe (équipe ${team})`)
     : team
       ? (mine ? `À vous de jouer (équipe ${team})` : `Tour de ${holder || '?'} (équipe ${team})`)
-      : (holder ? `${holder} a la main` : m.holder < 0 && m.frame > 0 ? 'Menus automatiques…' : '');
+      : (holder ? `${holder} a la main` : '');
   $('#turn').classList.toggle('mine', !!(team && mine));
   const waiting = m.waiting.length ? ` · attente de ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
   $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;

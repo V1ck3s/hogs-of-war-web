@@ -38,8 +38,65 @@ strict = true
 # v_wait and StGetNext (CPU overclock busy-waits), GetVideoMode (60 Hz), and
 # the battle module's terrain line walk the enemy AI calls while it thinks
 # (Fast Enemy AI) — 0x8006ADA0 in the French release (0x8006AD70 in DE).
+# Online Direct Start: stream player, title picture, entry of the menu module
+# from the main loop (0x80011DE4, 0x80017A70, 0x8005F7F8).
 mod_function_entry_funcs = ["0x80016A78", "0x80016BD0", "0x80016D9C", "0x8001DA54",
-                            "0x800238A0", "0x8001E30C", "0x8006ADA0"]
+                            "0x800238A0", "0x8001E30C", "0x8006ADA0",
+                            "0x80011DE4", "0x80017A70", "0x8005F7F8"]
+
+# Native-wide terrain: the battle module's terrain renderer (0x8005EC78)
+# projects 5x5 vertex patches and drops every quad whose four corners are all
+# left of x=0 (AND of the SXY words with 0x80008000) or all right of x=512
+# (x-512 sign test). Wider views reveal up to ~427 px beyond each 4:3 edge
+# (32:9 at the 512-wide battle framebuffer), where the ground was then
+# missing. Keep the top test only (sign of Y), and move the right bound to
+# 944; the GPU clips what lies outside each player's own view. Same code for
+# every aspect, so lockstep peers with different screens stay identical.
+[[recompiler.patch]]
+id = "wide-terrain-left"
+address = "0x8005EEBC"
+expected = "0x004D1024"      # and v0,v0,t5   (both sign bits)
+replacement = "0x000217C2"   # srl v0,v0,31   (Y sign only)
+overlay_only = true
+note = "terrain quad cull: no left-edge reject"
+
+[[recompiler.patch]]
+id = "wide-terrain-right"
+address = "0x8005EE04"
+expected = "0x3C15FE00"      # lui s5,0xFE00  (x - 512)
+replacement = "0x3C15FC50"   # lui s5,0xFC50  (x - 944)
+overlay_only = true
+note = "terrain quad cull: right edge at x=944"
+
+# Same cull in the two other terrain patch renderers of that module
+# (0x8005F5CC and 0x8005FA1C families).
+[[recompiler.patch]]
+id = "wide-terrain2-left"
+address = "0x8005F814"
+expected = "0x004E1024"      # and v0,v0,t6
+replacement = "0x000217C2"   # srl v0,v0,31
+overlay_only = true
+
+[[recompiler.patch]]
+id = "wide-terrain2-right"
+address = "0x8005F76C"
+expected = "0x3C18FE00"      # lui t8,0xFE00
+replacement = "0x3C18FC50"   # lui t8,0xFC50
+overlay_only = true
+
+[[recompiler.patch]]
+id = "wide-terrain3-left"
+address = "0x8005FB10"
+expected = "0x004E1024"      # and v0,v0,t6
+replacement = "0x000217C2"   # srl v0,v0,31
+overlay_only = true
+
+[[recompiler.patch]]
+id = "wide-terrain3-right"
+address = "0x8005FA48"
+expected = "0x3C12FE00"      # lui s2,0xFE00
+replacement = "0x3C12FC50"   # lui s2,0xFC50
+overlay_only = true
 
 [runtime]
 window_title = "Cochons de Guerre"

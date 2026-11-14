@@ -53,6 +53,12 @@
       <ol id="seats" class="seats"></ol>
       <p class="muted small">Dans le jeu : <b>MULTIJOUEUR</b>, puis une équipe <b>JOUEUR</b> par place, dans l’ordre
         des places (Joueur 1, Joueur 2…). Pendant la bataille, seule l’équipe dont c’est le tour obéit à son joueur.</p>
+      <label>Format d’image (le vôtre : chaque joueur choisit le sien)
+        <select id="aspect">
+          <option value="auto" selected>Celui de mon écran</option>
+          <option value="4:3">4:3</option><option value="16:9">16:9</option><option value="16:10">16:10</option>
+          <option value="21:9">21:9</option><option value="32:9">32:9</option>
+        </select></label>
       <label>Qualité d’image (sur votre PC uniquement)
         <select id="quality">
           <option value="1">Rapide — définition d’origine (PC modestes)</option>
@@ -71,12 +77,6 @@
           <select id="cpus">
             <option value="0">Aucune</option><option value="1" selected>1</option>
             <option value="2">2</option><option value="3">3</option>
-          </select></label>
-        <label>Format d’image de la partie
-          <select id="aspect">
-            <option value="auto" selected>Celui de mon écran</option>
-            <option value="4:3">4:3</option><option value="16:9">16:9</option><option value="16:10">16:10</option>
-            <option value="21:9">21:9</option><option value="32:9">32:9</option>
           </select></label>
         <button id="btn-start" class="primary">Lancer la partie</button>
       </div>

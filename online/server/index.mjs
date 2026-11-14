@@ -237,7 +237,7 @@ function onSnapshotBytes(c, data) {
   const dropped = [...S.dropped.keys()].map((id) => [S.players.indexOf(id), f - 1]).filter(([i]) => i >= 0);
   const meta = JSON.stringify({
     t: 'resync', session: S.id, f, players: S.players, delay: r.delay, hostIndex, dropped,
-    mode: r.mode, cpus: r.cpus | 0, aspect: S.aspect, host: r.host, joined: joined.join(', '),
+    mode: r.mode, cpus: r.cpus | 0, host: r.host, joined: joined.join(', '),
   });
   for (const id of S.inGame) {
     const o = clients.get(id);
@@ -330,16 +330,15 @@ function onJson(c, m) {
       if (!r || r.host !== c.id || r.state !== 'lobby') return;
       const players = [...r.seats.entries()].filter(([, s]) => s >= 0).sort((a, b) => a[1] - b[1]).map(([id]) => id);
       if (!players.length) return;
-      const aspect = Math.max(4 / 3, Math.min(32 / 9, +m.aspect || 16 / 9));
       r.session = {
-        id: newId(), players, aspect, last: new Map(), dropped: new Map(),
+        id: newId(), players, last: new Map(), dropped: new Map(),
         names: new Map(players.map((id) => [id, clients.get(id)?.name])),
         inGame: new Set(r.members),
       };
       r.state = 'running';
       log(`salon ${r.code} : partie lancée, ${players.length} joueur(s)`);
       broadcastRoom(r);
-      broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, aspect, mode: r.mode, cpus: r.cpus | 0 });
+      broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, mode: r.mode, cpus: r.cpus | 0 });
       return;
     }
     case 'end':
