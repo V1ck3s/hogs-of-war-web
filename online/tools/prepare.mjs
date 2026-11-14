@@ -48,8 +48,11 @@ function addTree(srcDir, destDir) {
 // and only drawn wider (the battle module's terrain cull is widened by the
 // game.toml patches for every view), so each player may use their own
 // screen shape without changing the simulation.
+// The sky and other 2D backdrops drawn before the 3D world are only 4:3 wide:
+// stretch them over the wider view (presentation only).
 add('game.toml', Buffer.from(fs.readFileSync(path.join(BUILD, 'game.toml'), 'utf8')
-  .replace(/^native_wide = false$/m, 'native_wide = true')));
+  .replace(/^native_wide = false$/m,
+    'native_wide = true\nnw_backdrop = true\nnw_flat_backdrop = true\nnw_phase_backdrop = true')));
 add('psx_game_version.txt', fs.readFileSync(path.join(BUILD, 'psx_game_version.txt')));
 addTree(path.join(BUILD, 'mods/bundled'), 'mods/bundled');
 addTree(path.join(BUILD, 'bios'), 'bios');
