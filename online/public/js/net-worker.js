@@ -90,10 +90,45 @@ function clearTags() {
   for (let i = 0; i < mem.ring; i++) Atomics.notify(mem.i32, t0 + i);
 }
 
+// Watchdog: the game not taking a new frame for 5 s, or the page's own
+// thread not answering for 5 s, is reported to the server's log (through the
+// lane, which does not need the page). Data only: what each side last saw.
+let pageBeat = 0, pageInfo = null, lastFrame = -1, lastFrameAt = 0, stallSent = false, pageSent = false;
+function sendDiag(kind, extra) {
+  views();
+  const status = mem.status >> 2;
+  const d = {
+    frame: Atomics.load(mem.u32, status), waitMs: Atomics.load(mem.u32, status + 3),
+    published: ls ? ls.nextPublish : -1, sentUpTo: ls ? ls.nextLocal : -1, lead: ls ? ls.lead : 0,
+    waiting: ls ? ls.waitingOn() : [], lane: laneOpen, pageBeatAgoMs: pageBeat ? Math.round(performance.now() - pageBeat) : -1,
+    page: pageInfo, ...extra,
+  };
+  const msg = { t: 'diag', kind, d };
+  if (laneOpen && lane && lane.readyState === 1) lane.send(JSON.stringify(msg));
+  else postMessage({ t: 'send', msg });
+}
+function watchdog(now) {
+  views();
+  const f = Atomics.load(mem.u32, mem.status >> 2);
+  if (f !== lastFrame) {
+    if (stallSent) sendDiag('reprise', { stalledMs: Math.round(now - lastFrameAt) });
+    lastFrame = f; lastFrameAt = now; stallSent = false;
+  } else if (!stallSent && lastFrameAt && now - lastFrameAt > 5000) {
+    stallSent = true;
+    sendDiag('gel', { stalledMs: Math.round(now - lastFrameAt) });
+  }
+  if (pageBeat && now - pageBeat > 5000) {
+    if (!pageSent) { pageSent = true; sendDiag('page-bloquee', {}); }
+  } else if (pageSent && pageBeat && now - pageBeat < 2000) {
+    pageSent = false; sendDiag('page-reprise', {});
+  }
+}
+
 let statsAt = 0;
 function loop() {
   tick();
   const now = performance.now();
+  watchdog(now);
   if (now - statsAt > 500) {
     statsAt = now;
     const status = mem.status >> 2;
@@ -134,6 +169,12 @@ function handle(m) {
       views();
       lastHashFrame = Atomics.load(mem.u32, (mem.status >> 2) + 6);
       postMessage({ t: 'resync-ready', start: m.start });
+      break;
+    case 'beat':
+      pageBeat = performance.now(); pageInfo = m.info;
+      break;
+    case 'diag':
+      if (mem) sendDiag(m.kind, m.extra || {});
       break;
     case 'lead':
       lead = m.n | 0;

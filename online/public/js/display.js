@@ -124,9 +124,15 @@ export class GpuDisplay {
       const cw = Math.max(1, Math.round(c.clientWidth * dpr));
       const ch = Math.max(1, Math.round(c.clientHeight * dpr));
       if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
-      const n = Module._swt_gl_pump(cw, ch, scale);
+      let n = 0;
+      try { n = Module._swt_gl_pump(cw, ch, scale); } catch (e) {
+        // Keep drawing attempts going; the page's error report tells why.
+        this.raf = requestAnimationFrame(loop);
+        throw e;
+      }
       if (n < 0) { onFail(); return; }
       this.frames += n;
+      this.lastPumpAt = performance.now();
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);

@@ -372,6 +372,13 @@ function onJson(c, m) {
       for (const id of r.members) if (id !== c.id) sendLane(clients.get(id), s);
       return;
     }
+    case 'diag': {
+      // A player's page reports a crash or a stall (what it saw, for the log).
+      let d = '';
+      try { d = JSON.stringify(m.d); } catch { d = String(m.d); }
+      log(`diagnostic ${r ? `salon ${r.code}` : 'hors salon'}, ${c.name} : ${String(m.kind || '?').slice(0, 20)} ${d.slice(0, 20000)}`);
+      return;
+    }
     case 'chat':
       if (!r) return;
       m.text = String(m.text || '').slice(0, 300);
@@ -413,7 +420,7 @@ export function start({ port = PORT, host = HOST } = {}) {
         if (bin) return;
         try { m = JSON.parse(data); } catch { return; }
         if (m && m.t === 'ping') { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'pong', ts: m.ts })); return; }
-        if (m && (m.t === 'in' || m.t === 'hash') && clients.get(owner.id) === owner) onJson(owner, m);
+        if (m && (m.t === 'in' || m.t === 'hash' || m.t === 'diag') && clients.get(owner.id) === owner) onJson(owner, m);
         return;
       }
       if (bin) { onSnapshotBytes(c, data); return; }

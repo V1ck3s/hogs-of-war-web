@@ -259,6 +259,46 @@ function aspectRatioText(a) {
   return `${best[0]}:${best[1]}`;
 }
 
+// Problem reports: a crash or a stall is shown to the player and written to
+// the server's log with what this page last saw (the lockstep worker reports
+// a stall even if this page's thread no longer runs).
+const recentLog = [];
+function noteLog(t) {
+  recentLog.push(`${Math.round(performance.now())} ${String(t).slice(0, 300)}`);
+  if (recentLog.length > 40) recentLog.shift();
+  if (/execution completed|abort|fatal|Aborted/i.test(t)) reportProblem('arret', { line: String(t).slice(0, 300) });
+}
+let problemShown = false;
+function pageInfo() {
+  const M = state.game;
+  const info = { gpu: !!state.gpu, q: quality(), aspect: aspectRatioText(chosenAspect()), shown: state.display ? state.display.frames : -1,
+    lastPump: state.display && state.display.lastPumpAt ? Math.round(performance.now() - state.display.lastPumpAt) : -1,
+    ua: navigator.userAgent.slice(0, 160) };
+  try { if (M && M._swt_probe) info.probe = [0, 1, 2, 3, 4, 7, 8, 9].map((i) => M._swt_probe(i) >>> 0); } catch { /* ignore */ }
+  return info;
+}
+function exitTrace() {
+  // Written by the game when its CPU leaves through a null address.
+  try {
+    const t = JSON.parse(new TextDecoder().decode(state.game.FS.readFile('/game/psx_cps_exit_trace.json')));
+    return { final_pc: t.final_pc, final_ra: t.final_ra, final_sp: t.final_sp,
+      tail: t.tail.slice(-40).map((e) => `${e.frame} ${e.target} ra=${e.ra} a0=${e.a0}`) };
+  } catch { return null; }
+}
+function reportProblem(kind, extra) {
+  const d = { ...extra, page: pageInfo(), log: recentLog.slice(-25) };
+  if (kind === 'arret') d.exit = exitTrace();
+  if (state.worker) state.worker.postMessage({ t: 'diag', kind, extra: d });
+  else sendWs({ t: 'diag', kind, d });
+  if (!problemShown && kind !== 'reprise') {
+    problemShown = true;
+    toast('Le jeu s’est arrêté de façon inattendue. Le détail a été envoyé au serveur.', 20000);
+  }
+}
+addEventListener('error', (e) => { if (state.game) reportProblem('erreur', { msg: String(e.message).slice(0, 300), at: `${e.filename}:${e.lineno}` }); });
+addEventListener('unhandledrejection', (e) => { if (state.game) reportProblem('erreur', { msg: String(e.reason && (e.reason.stack || e.reason)).slice(0, 500) }); });
+setInterval(() => { if (state.worker) state.worker.postMessage({ t: 'beat', info: pageInfo() }); }, 1000);
+
 async function startGame(go) {
   show('#play');
   $('#splash').hidden = false;
@@ -275,8 +315,9 @@ async function startGame(go) {
   const Module = {
     canvas: $('#sdl'),   // SDL's own surface stays hidden; Display draws the game
     arguments: [],
-    print: (t) => console.log(t),
-    printErr: (t) => console.warn(t),
+    print: (t) => { console.log(t); noteLog(t); },
+    printErr: (t) => { console.warn(t); noteLog(t); },
+    onAbort: (what) => reportProblem('arret', { what: String(what).slice(0, 500) }),
     locateFile: (p) => `/game/${p}${pre.v}`,
     mainScriptUrlOrBlob: `/game/Cochons_de_Guerre.js${pre.v}`,
     instantiateWasm(imports, done) {
@@ -315,6 +356,7 @@ async function startGame(go) {
         // presentation thread): the emulation thread skips rasterizing until
         // the game reads VRAM back. Same for every participant (lockstep).
         PSX_WEB_SKIP_NATIVE_RASTER: params.get('raster') === '1' ? '0' : '1',
+        ...(params.get('memo') === '0' ? { PSX_OVERLAY_MEMO: '0' } : {}),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
         ...(params.get('diag') ? { PSX_RUNTIME_PERF_DIAG: '1', PSX_RUNTIME_PERF_DIAG_MS: '5000' } : {}),
