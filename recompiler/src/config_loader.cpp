@@ -1705,9 +1705,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_nw_backdrop = toml::find<bool>(ws, "nw_backdrop");
         if (ws.contains("nw_backdrop_min_height")) {
             ws_nw_backdrop_min_height = toml::find<int>(ws, "nw_backdrop_min_height");
-            if (ws_nw_backdrop_min_height < 8 || ws_nw_backdrop_min_height > 480)
+            if (ws_nw_backdrop_min_height < 1 || ws_nw_backdrop_min_height > 480)
                 throw std::runtime_error(fmt::format(
-                    "{}: [widescreen] nw_backdrop_min_height must be 8..480",
+                    "{}: [widescreen] nw_backdrop_min_height must be 1..480",
                     config_path.string()));
         }
         if (ws.contains("clear_reveal"))
