@@ -13,6 +13,35 @@ const pendingHashes = new Map(); // peers' digests for frames I have not reached
 let timer = 0;
 let lead = 0;
 
+// Lane: this worker's own socket to the server for lockstep traffic, so that
+// inputs and digests never wait for the page's main thread. Until it is open
+// (or if it drops) they go through the page's socket as before.
+let lane = null, laneInfo = null, laneOpen = false, session = null;
+function openLane() {
+  if (!laneInfo || lane) return;
+  let w;
+  try { w = new WebSocket(laneInfo.url); } catch { return; }
+  lane = w;
+  w.onopen = () => { w.send(JSON.stringify({ t: 'lane', id: laneInfo.id, key: laneInfo.key })); laneOpen = true; };
+  w.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m.s !== undefined && m.s !== session) return;
+    if (m.t === 'in' || m.t === 'hash') handle(m);
+    else if (m.t === 'pong') postMessage({ t: 'rtt', rtt: performance.now() - m.ts });
+  };
+  w.onclose = () => { lane = null; laneOpen = false; if (laneInfo) setTimeout(openLane, 1000); };
+}
+// Round trip measured on the lane itself: independent of the page's load.
+setInterval(() => {
+  if (laneOpen && lane && lane.readyState === 1) lane.send(JSON.stringify({ t: 'ping', ts: performance.now() }));
+}, 1000);
+
+function sendNet(msg) {
+  if (laneOpen && lane && lane.readyState === 1) lane.send(JSON.stringify({ ...msg, s: session }));
+  else postMessage({ t: 'send', msg });
+}
+
 function views() {
   // Shared memory may grow (new SharedArrayBuffer object, same bytes).
   if (!mem.u32 || mem.u32.buffer !== mem.memory.buffer) {
@@ -29,7 +58,7 @@ function tick() {
   // consumed any of the new schedule yet: count from its first frame.
   const cur = Math.max(Atomics.load(mem.u32, status), ls.start);
   const batch = ls.local(cur, word);
-  if (batch) postMessage({ t: 'send', msg: { t: 'in', f: batch.f, w: batch.w } });
+  if (batch) sendNet({ t: 'in', f: batch.f, w: batch.w });
   ls.pump(cur + mem.ring - 8, (f, words) => {
     const slot = f % mem.ring;
     const base = (mem.words >> 1) + slot * mem.stride;
@@ -45,7 +74,7 @@ function tick() {
     lastHashFrame = hf;
     hashes.set(hf, h);
     if (hashes.size > 64) hashes.delete(hashes.keys().next().value);
-    postMessage({ t: 'send', msg: { t: 'hash', f: hf, h } });
+    sendNet({ t: 'hash', f: hf, h });
     const early = pendingHashes.get(hf);
     if (early) {
       pendingHashes.delete(hf);
@@ -76,10 +105,13 @@ function loop() {
   }
 }
 
-onmessage = (e) => {
-  const m = e.data;
+onmessage = (e) => handle(e.data);
+
+function handle(m) {
   switch (m.t) {
     case 'start':
+      if (m.session !== undefined) session = m.session;
+      if (m.lane && !laneInfo) { laneInfo = m.lane; openLane(); }
       mem = { memory: m.memory, tags: m.tags, words: m.words, status: m.status, ring: m.ring, maxp: m.maxp, stride: m.stride };
       ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start || 0, host: m.host || 0 });
       if (lead) ls.setLead(lead);
@@ -88,6 +120,7 @@ onmessage = (e) => {
       timer = setInterval(loop, 2);
       break;
     case 'resync':
+      if (m.session !== undefined) session = m.session;
       // Everyone reloads the same snapshot: a new schedule from its frame. The
       // ring is emptied first so that the game never takes a stale frame of
       // the previous schedule (peers ahead of the snapshot rewind to it).
@@ -126,7 +159,9 @@ onmessage = (e) => {
     case 'stop':
       clearInterval(timer);
       ls = null;
+      laneInfo = null;
+      if (lane) lane.close();
       break;
     default:
   }
-};
+}

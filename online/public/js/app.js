@@ -5,7 +5,7 @@
 // demand) from frame 0, and the lockstep worker feeds it every participant's
 // inputs frame by frame. Each player has their own running copy of the game.
 import { Input, ACTIONS, keyLabel } from './input.js';
-import { Display } from './display.js';
+import { Display, GpuDisplay } from './display.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -72,7 +72,7 @@ function connect() {
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') { onSnapshot(e.data); return; }
       const m = JSON.parse(e.data);
-      if (m.t === 'welcome') { state.id = m.id; resolve(); }
+      if (m.t === 'welcome') { state.id = m.id; state.key = m.key; resolve(); }
       onMessage(m);
     };
     setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'ping', ts: performance.now() })), 2000);
@@ -99,19 +99,22 @@ function onMessage(m) {
       break;
     case 'hash': if (state.worker) state.worker.postMessage(m); break;
     case 'chat': chatLine(m.name, m.text); break;
-    case 'pong': {
-      const rtt = performance.now() - m.ts;
-      state.rtt = rtt;
-      (state.rtts ||= []).push(rtt);
-      if (state.rtts.length > 8) state.rtts.shift();
-      sendWs({ t: 'rtt', rtt: Math.max(...state.rtts) });
-      updateLead();
+    case 'pong':
+      // The lockstep worker's lane measures the game's real path once open.
+      if (!state.laneRtt) noteRtt(performance.now() - m.ts);
       break;
-    }
     case 'net': state.roomRtt = m.maxRtt; updateLead(); break;
     case 'error': toast(m.message, 6000); break;
     default:
   }
+}
+
+function noteRtt(rtt) {
+  state.rtt = rtt;
+  (state.rtts ||= []).push(rtt);
+  if (state.rtts.length > 8) state.rtts.shift();
+  sendWs({ t: 'rtt', rtt: Math.max(...state.rtts) });
+  updateLead();
 }
 
 // Input lead: my words must reach the slowest peer before its game needs
@@ -183,6 +186,12 @@ function quality() {
 }
 try { const q = params.get('q') || localStorage.getItem('cdg.online.quality'); if (q) $('#quality').value = q; } catch { /* ignore */ }
 $('#quality').onchange = () => { try { localStorage.setItem('cdg.online.quality', $('#quality').value); } catch { /* ignore */ } };
+
+// Picture drawn by the graphics card (WebGL 2) unless ?gpu=0 or unavailable.
+function gpuPicture() {
+  if (params.get('gpu') === '0') return false;
+  try { return !!document.createElement('canvas').getContext('webgl2'); } catch { return false; }
+}
 
 function chosenAspect() {
   const v = $('#aspect').value;
@@ -261,6 +270,8 @@ async function startGame(go) {
   // Each player's own picture shape: the game runs native-wide (the world is
   // simulated the same whatever the view), so peers may differ.
   const aspect = aspectRatioText(chosenAspect());
+  const gpu = gpuPicture();
+  state.gpu = gpu;
   const Module = {
     canvas: $('#sdl'),   // SDL's own surface stays hidden; Display draws the game
     arguments: [],
@@ -299,6 +310,7 @@ async function startGame(go) {
         PSX_WEB_MODE: go.mode || 'multi',
         PSX_WEB_PLAYERS: String(go.players.length),
         PSX_WEB_CPUS: String(go.cpus | 0),
+        ...(gpu ? { PSX_WEB_GL: '1' } : {}),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
         ...(params.get('diag') ? { PSX_RUNTIME_PERF_DIAG: '1', PSX_RUNTIME_PERF_DIAG_MS: '5000' } : {}),
@@ -355,13 +367,14 @@ async function takeSnapshot() {
 function onSnapshot(buf) {
   const m = state.resyncMeta;
   state.resyncMeta = null;
+  console.log(`[partie] instantané reçu (${buf.byteLength} octets, image ${m ? m.f : '?'})`);
   if (!m) return;
   state.session = m.session;
   state.players = m.players;
   if (state.game && state.worker) {
     toast(m.joined ? `${m.joined} rejoint la partie : synchronisation…` : 'Synchronisation de la partie…');
     state.resyncBlob = buf;
-    state.worker.postMessage({ t: 'resync', players: m.players, me: state.id, delay: m.delay, start: m.f, host: m.hostIndex | 0, dropped: m.dropped });
+    state.worker.postMessage({ t: 'resync', session: state.session, players: m.players, me: state.id, delay: m.delay, start: m.f, host: m.hostIndex | 0, dropped: m.dropped });
   } else {
     startGame({ ...m, snapshot: buf });
   }
@@ -393,8 +406,10 @@ async function attach(Module, go) {
     const m = e.data;
     if (m.t === 'send') sendWs({ ...m.msg, s: state.session });
     else if (m.t === 'stats') onStats(m);
+    else if (m.t === 'rtt') { if (!state.laneRtt) state.rtts = []; state.laneRtt = true; noteRtt(m.rtt); }
     else if (m.t === 'log') console.log('[lockstep]', m.text);
     else if (m.t === 'resync-ready' && state.resyncBlob) {
+      console.log(`[partie] rechargement de l’instantané à l’image ${m.start}`);
       stageSnapshot(Module, state.resyncBlob, m.start, state.players.length);
       state.resyncBlob = null;
     }
@@ -404,6 +419,8 @@ async function attach(Module, go) {
   w.onerror = (e) => console.warn('[lockstep] worker error', e.message);
   w.postMessage({
     t: 'start', memory,
+    session: state.session,
+    lane: state.key ? { url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`, id: state.id, key: state.key } : null,
     tags: Module._psx_web_lockstep_tags(), words: Module._psx_web_lockstep_words(),
     status: Module._psx_web_lockstep_status(), ring: Module._psx_web_lockstep_ring(),
     maxp: Module._psx_web_lockstep_maxp(), stride: Module._psx_web_lockstep_stride(),
@@ -437,8 +454,14 @@ async function attach(Module, go) {
     resume();
   } catch (e) { console.warn('audio', e); }
   try {
-    const b0 = Module._psx_web_frame_buffer(0), b1 = Module._psx_web_frame_buffer(1);
-    state.display = new Display($('#canvas'), memory, Module._psx_web_frame_header(), (i) => (i ? b1 : b0));
+    if (state.gpu) {
+      state.display = new GpuDisplay($('#canvas'), Module, quality(), () => {
+        toast('La carte graphique n’a pas pu être utilisée : rechargez la page avec ?gpu=0.', 15000);
+      });
+    } else {
+      const b0 = Module._psx_web_frame_buffer(0), b1 = Module._psx_web_frame_buffer(1);
+      state.display = new Display($('#canvas'), memory, Module._psx_web_frame_header(), (i) => (i ? b1 : b0));
+    }
   } catch (e) { toast(`Affichage impossible : ${e.message}`, 10000); }
   revealWhenReady(Module, go);
   canvas_focus();
@@ -463,6 +486,7 @@ function onStats(m) {
 }
 
 function stopGame() {
+  state.laneRtt = false;
   if (state.worker) { state.worker.postMessage({ t: 'stop' }); state.worker.terminate(); state.worker = null; }
   if (state.audio) { state.audio.close(); state.audio = null; }
   if (state.game) {

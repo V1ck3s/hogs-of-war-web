@@ -154,6 +154,11 @@ function newRoomCode() {
   }
 }
 function send(c, obj) { if (c && c.ws.readyState === 1) c.ws.send(JSON.stringify(obj)); }
+// Lockstep traffic (inputs, digests) goes to a player's lane when it has one:
+// a second socket opened by the page's lockstep worker, so that a busy page
+// (drawing, garbage collection, background tab) never delays it.
+function laneOf(c) { return c && c.lane && c.lane.readyState === 1 ? c.lane : c && c.ws.readyState === 1 ? c.ws : null; }
+function sendLane(c, text) { const w = laneOf(c); if (w) w.send(text); }
 
 function roomView(r) {
   return {
@@ -252,7 +257,7 @@ function onJson(c, m) {
   switch (m.t) {
     case 'hello':
       c.name = String(m.name || 'Cochon').slice(0, 24);
-      send(c, { t: 'welcome', id: c.id, version: manifest?.version, maxPlayers: MAX_PLAYERS });
+      send(c, { t: 'welcome', id: c.id, key: c.key, version: manifest?.version, maxPlayers: MAX_PLAYERS });
       return;
     case 'create': {
       if (r) leaveRoom(c);
@@ -358,12 +363,18 @@ function onJson(c, m) {
       const lastF = (m.f | 0) + (Array.isArray(m.w) ? m.w.length : 0) - 1;
       r.session.last.set(c.id, Math.max(r.session.last.get(c.id) ?? -1, lastF));
       const s = JSON.stringify({ t: 'in', s: m.s, p: c.id, f: m.f | 0, w: m.w });
-      for (const id of r.members) if (id !== c.id) { const o = clients.get(id); if (o.ws.readyState === 1) o.ws.send(s); }
+      for (const id of r.members) if (id !== c.id) sendLane(clients.get(id), s);
       return;
     }
-    case 'hash': case 'chat':
+    case 'hash': {
       if (!r) return;
-      if (m.t === 'chat') m.text = String(m.text || '').slice(0, 300);
+      const s = JSON.stringify({ ...m, p: c.id, name: c.name });
+      for (const id of r.members) if (id !== c.id) sendLane(clients.get(id), s);
+      return;
+    }
+    case 'chat':
+      if (!r) return;
+      m.text = String(m.text || '').slice(0, 300);
       for (const id of r.members) if (id !== c.id) send(clients.get(id), { ...m, p: c.id, name: c.name });
       return;
     case 'ping':
@@ -391,16 +402,36 @@ export function start({ port = PORT, host = HOST } = {}) {
     : http.createServer(handler);
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 32 << 20 });
   wss.on('connection', (ws) => {
-    const c = { id: newId(), ws, name: 'Cochon', room: null, alive: true, rtt: 0 };
+    const c = { id: newId(), ws, name: 'Cochon', room: null, alive: true, rtt: 0, key: crypto.randomBytes(12).toString('hex') };
     clients.set(c.id, c);
+    let owner = null;   // set when this socket is another client's lane
     ws.on('pong', () => { c.alive = true; });
     ws.on('message', (data, bin) => {
-      if (bin) { onSnapshotBytes(c, data); return; }
       let m;
+      if (owner) {
+        // A lane carries only that player's lockstep inputs and digests.
+        if (bin) return;
+        try { m = JSON.parse(data); } catch { return; }
+        if (m && m.t === 'ping') { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'pong', ts: m.ts })); return; }
+        if (m && (m.t === 'in' || m.t === 'hash') && clients.get(owner.id) === owner) onJson(owner, m);
+        return;
+      }
+      if (bin) { onSnapshotBytes(c, data); return; }
       try { m = JSON.parse(data); } catch { return; }
+      if (m && m.t === 'lane') {
+        const o = clients.get(String(m.id || ''));
+        if (!o || o === c || !o.key || o.key !== m.key) { ws.close(); return; }
+        owner = o;
+        o.lane = ws;
+        clients.delete(c.id);   // not a player: keep-alive goes through its pings below
+        return;
+      }
       if (m && typeof m.t === 'string') onJson(c, m);
     });
-    ws.on('close', () => { leaveRoom(c); clients.delete(c.id); });
+    ws.on('close', () => {
+      if (owner) { if (owner.lane === ws) owner.lane = null; return; }
+      leaveRoom(c); clients.delete(c.id);
+    });
   });
   const ka = setInterval(() => {
     for (const c of clients.values()) {

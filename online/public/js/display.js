@@ -109,3 +109,28 @@ export class Display {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }
+
+// Graphics-card picture (WebGL 2): the game records its drawing commands and
+// this loop replays them on the page's main thread once per display refresh
+// (gpu_sw_threaded.c, swt_gl_pump), at the chosen quality, straight onto the
+// canvas. No picture is copied between threads.
+export class GpuDisplay {
+  constructor(canvas, Module, scale, onFail) {
+    this.canvas = canvas;
+    this.frames = 0;
+    const loop = () => {
+      const c = this.canvas;
+      const dpr = devicePixelRatio || 1;
+      const cw = Math.max(1, Math.round(c.clientWidth * dpr));
+      const ch = Math.max(1, Math.round(c.clientHeight * dpr));
+      if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+      const n = Module._swt_gl_pump(cw, ch, scale);
+      if (n < 0) { onFail(); return; }
+      this.frames += n;
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  stop() { cancelAnimationFrame(this.raf); }
+}

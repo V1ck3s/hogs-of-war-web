@@ -25,7 +25,7 @@ let roomCode = '';
 async function browser(name, viewport) {
   const b = await puppeteer.launch({
     executablePath: process.env.CHROME || '/usr/bin/chromium', headless: true, protocolTimeout: 900000,
-    args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
+    args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
   });
   const page = await b.newPage();
   await page.setViewport(viewport);

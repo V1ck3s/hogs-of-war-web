@@ -17,7 +17,7 @@ srv.stdout.on('data', (d) => process.stdout.write('[serveur] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const browser = await puppeteer.launch({
   executablePath: process.env.CHROME || '/usr/bin/chromium', headless: true, protocolTimeout: 600000,
-  args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader'],
+  args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader'],
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const page = await browser.newPage();

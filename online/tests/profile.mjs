@@ -16,7 +16,7 @@ await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const b = await puppeteer.launch({
   executablePath: process.env.CHROME || '/usr/bin/chromium', headless: true, protocolTimeout: 900000,
-  args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
+  args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
 });
 const page = await b.newPage();
 await page.setViewport({ width: 1280, height: 720 });
@@ -58,12 +58,21 @@ for (const s of sessions) {
   const byId = new Map(profile.nodes.map((n) => [n.id, n]));
   const dt = new Map();
   for (let i = 0; i < profile.samples.length; i++) dt.set(profile.samples[i], (dt.get(profile.samples[i]) || 0) + (profile.timeDeltas[i] || 0));
+  const mine = new Map();
+  let mt = 0;
   for (const [id, us] of dt) {
     const n = byId.get(id);
+    const nm = n.callFrame.functionName || '(anonymous)';
+    if (nm !== '(idle)' && nm !== '(program)') { mine.set(nm, (mine.get(nm) || 0) + us); mt += us; }
     const name = n.callFrame.functionName || '(anonymous)';
     if (name === '(idle)' || name === '(program)') continue;
     self.set(name, (self.get(name) || 0) + us);
     total += us;
+  }
+  if (mt > 0.05 * SECONDS * 1e6) {
+    const t5 = [...mine.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+    console.log(`thread : ${(mt / 1e6).toFixed(2)} s CPU (${(100 * mt / (SECONDS * 1e6)).toFixed(0)} % d’un cœur)`);
+    for (const [n, us] of t5) console.log(`    ${(100 * us / mt).toFixed(1).padStart(5)} %  ${n}`);
   }
 }
 const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40);
