@@ -128,6 +128,7 @@ static uint32_t rec_reserve_size;
 static int s_gl_mode;               /* GPU replay on the page's main thread */
 static _Atomic int s_dropping;      /* GPU mode: ring overflowed, records dropped */
 static _Atomic int s_resync_ready;  /* GPU mode: the page drained the ring since */
+static uint32_t s_resyncs, s_gl_xfers, s_gl_big_xfers, s_gl_last_xfer;   /* probes */
 
 /* 1 when `need` bytes are free. GPU mode never waits: a full ring starts
  * dropping records until the page catches up (then everything is resent). */
@@ -414,6 +415,12 @@ static void run_record_gl(const RecHdr *h, int *presented) {
     case OP_SLINE: G->draw_shaded_line(a[0], a[1], (uint16_t)a[2], a[3], a[4], (uint16_t)a[5]); break;
     case OP_PIXEL: G->vram_write(a[0], a[1], (uint16_t)a[2]); break;
     case OP_XFER_IN:
+        s_gl_xfers++;
+        if (a[2] * a[3] >= 64 * 64) {
+            s_gl_big_xfers++;
+            s_gl_last_xfer = (uint32_t)(a[0] & 1023) | ((uint32_t)(a[1] & 511) << 10)
+                           | ((uint32_t)(a[2] & 2047) << 19);
+        }
         G->vram_transfer_in(a[0], a[1], a[2], a[3], (const uint16_t *)(a + 4)); break;
     case OP_AREA:   G->set_draw_area(a[0], a[1], a[2], a[3]); break;
     case OP_OFFSET: G->set_draw_offset(a[0], a[1]); break;
@@ -525,7 +532,7 @@ static int s_bd_sent_on = 0, s_bd_sent_pct = 0;
 static int s_pending_read = 0;
 /* Current drawing state, resent with the whole VRAM after a GPU-mode drop. */
 static int s_sh_semi[2], s_sh_mask[2], s_sh_tw, s_sh_mod[4] = { 128, 128, 128, 0 };
-static int s_sh_area[4] = { 0, 0, 1023, 511 }, s_sh_off[2];
+static int s_sh_off[2];
 static int s_sh_wide[2], s_sh_target = -1;
 
 static void note_base(int base) {
@@ -560,16 +567,74 @@ static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d);
  * only on guest state, so every participant takes it at the same instruction
  * and all copies of the game stay identical. */
 #define QUIET_FRAMES 300u
+/* VRAM the emulation thread left out of date: 16x16-pixel blocks a skipped
+ * primitive may have drawn into (its whole drawing area). The picture side
+ * holds the real contents there, so a GPU-mode resync must not send those
+ * blocks back (it would paste an old frame over the live one). A transfer or
+ * a fill that covers a block makes it current again; a copy carries its
+ * source's state. */
+#define STALE_BW 64
+#define STALE_BH 32
+static uint8_t s_stale[STALE_BH][STALE_BW];
+static int s_stale_area[4] = { -1, -1, -1, -1 };   /* area last marked */
+static void stale_set(int x0, int y0, int x1, int y1, int v, int whole_only) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > 1023) x1 = 1023;
+    if (y1 > 511) y1 = 511;
+    if (x1 < x0 || y1 < y0) return;
+    int bx0 = x0 >> 4, by0 = y0 >> 4, bx1 = x1 >> 4, by1 = y1 >> 4;
+    if (whole_only) {               /* only blocks the rectangle covers entirely */
+        if (x0 & 15) bx0++;
+        if (y0 & 15) by0++;
+        if ((x1 & 15) != 15) bx1--;
+        if ((y1 & 15) != 15) by1--;
+    }
+    for (int by = by0; by <= by1; by++)
+        for (int bx = bx0; bx <= bx1; bx++) s_stale[by][bx] = (uint8_t)v;
+}
+static uint32_t s_skipped_prims;
+static int s_sh_area[4] = { 0, 0, 1023, 511 };
+static int skip_prim(void) {
+    ++s_skipped_prims;
+    if (memcmp(s_stale_area, s_sh_area, sizeof s_stale_area) != 0) {
+        memcpy(s_stale_area, s_sh_area, sizeof s_stale_area);
+        stale_set(s_sh_area[0], s_sh_area[1], s_sh_area[2], s_sh_area[3], 1, 0);
+    }
+    return 1;
+}
+/* Rectangle (with VRAM wrap) brought up to date by the emulation thread. */
+static void stale_clear_rect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    x &= 1023; y &= 511;
+    if (w > 1024) w = 1024;
+    if (h > 512) h = 512;
+    const int w1 = x + w > 1024 ? 1024 - x : w, h1 = y + h > 512 ? 512 - y : h;
+    stale_set(x, y, x + w1 - 1, y + h1 - 1, 0, 1);
+    if (w1 < w) stale_set(0, y, w - w1 - 1, y + h1 - 1, 0, 1);
+    if (h1 < h) stale_set(x, 0, x + w1 - 1, h - h1 - 1, 0, 1);
+    if (w1 < w && h1 < h) stale_set(0, 0, w - w1 - 1, h - h1 - 1, 0, 1);
+    s_stale_area[0] = -1;            /* the next skipped primitive re-marks */
+}
+static int stale_any(int x, int y, int w, int h) {
+    for (int r = 0; r < h; r += 16)
+        for (int c = 0; c < w; c += 16)
+            if (s_stale[((y + r) & 511) >> 4][((x + c) & 1023) >> 4]) return 1;
+    if (s_stale[((y + h - 1) & 511) >> 4][((x + w - 1) & 1023) >> 4]) return 1;
+    return 0;
+}
 static int s_skip_raster_cfg;
 static uint32_t s_quiet;             /* gameplay frames since the last read-back */
 static int s_gameplay;               /* configured gameplay state, sampled per frame */
 int gpu_ws_gameplay_state_active(void);
-#define s_skip_raster (s_skip_raster_cfg && s_gameplay && s_wide_w > 0 && s_quiet >= QUIET_FRAMES && (++s_skipped_prims, 1))
-static uint32_t s_readbacks, s_skipped_prims;
+#define s_skip_raster (s_skip_raster_cfg && s_gameplay && s_wide_w > 0 && s_quiet >= QUIET_FRAMES && skip_prim())
+static uint32_t s_readbacks;
 void swt_vram_readback_begin(void) { s_quiet = 0; s_readbacks++; }
 /* Page-side probe (tests): [0] skip configured, [1] wide width, [2] read-back
  * -free gameplay frames, [3] read-backs so far, [4] primitives not
- * rasterized; [1] has bit 31 set during gameplay. */
+ * rasterized; [1] has bit 31 set during gameplay. GPU mode: [7] resyncs,
+ * [8] transfers replayed, [9] of which 64x64 or more, [10] the last of
+ * those (x | y << 10 | w << 19). */
 EMSCRIPTEN_KEEPALIVE uint32_t swt_probe(int i) {
     switch (i) {
     case 0: return (uint32_t)s_skip_raster_cfg;
@@ -585,12 +650,27 @@ EMSCRIPTEN_KEEPALIVE uint32_t swt_probe(int i) {
         if (psx_overlay_static_get_stats) psx_overlay_static_get_stats(NULL, &hits, NULL, NULL);
         return (uint32_t)hits;
     }
+    case 7: return s_resyncs;
+    case 8: return s_gl_xfers;
+    case 9: return s_gl_big_xfers;
+    case 10: return s_gl_last_xfer;
     default: return 0;
     }
 }
 int swt_active(void) { return s_started; }
 
+/* Records VRAM rectangle (x, y, w, h) as it stands (no wrap). */
+static void rec_vram_rect(int x, int y, int w, int h) {
+    int32_t *p = (int32_t *)rec_begin(OP_XFER_IN, 16u + (uint32_t)w * (uint32_t)h * 2u);
+    if (!p) return;
+    p[0] = x; p[1] = y; p[2] = w; p[3] = h;
+    uint16_t *d = (uint16_t *)(p + 4);
+    for (int r = 0; r < h; r++)
+        memcpy(d + (size_t)r * (size_t)w, s_vram + (size_t)(y + r) * 1024u + (size_t)x, (size_t)w * 2u);
+    rec_commit();
+}
 static void resync(void) {
+    s_resyncs++;
     REC(OP_SCALE, s_scale);
     REC(OP_FILTER, s_filter);
     REC(OP_SEMI, s_sh_semi[0], s_sh_semi[1]);
@@ -600,7 +680,17 @@ static void resync(void) {
     REC(OP_OFFSET, s_sh_off[0], s_sh_off[1]);
     REC(OP_MASK, 0, 0);
     REC(OP_WIDE_OFF, 0);
-    t_xfer_in(0, 0, 1024, 512, s_vram);       /* authoritative VRAM, whole */
+    /* The authoritative VRAM, except what the emulation thread did not draw
+     * (s_stale): the picture side's own contents stand there. */
+    for (int by = 0; by < STALE_BH; by++) {
+        for (int bx = 0; bx < STALE_BW;) {
+            if (s_stale[by][bx]) { bx++; continue; }
+            int ex = bx;
+            while (ex < STALE_BW && !s_stale[by][ex]) ex++;
+            rec_vram_rect(bx * 16, by * 16, (ex - bx) * 16, 16);
+            bx = ex;
+        }
+    }
     REC(OP_MASK, s_sh_mask[0], s_sh_mask[1]);
     REC(OP_WIDE_CONF, s_sh_wide[0], s_sh_wide[1]);
     if (s_sh_target >= 0) REC(OP_WIDE_TARGET, s_sh_target);
@@ -657,8 +747,17 @@ static void t_persp(int e, float q0, float q1, float q2) {
     memcpy(a + 1, q, sizeof q);
     rec_args(OP_PERSP, 4, a);
 }
-static void t_fill(int x, int y, int w, int h, uint16_t c) { sw_fill_rect(x, y, w, h, c); REC(OP_FILL, x, y, w, h, c); }
-static void t_copy(int sx, int sy, int dx, int dy, int w, int h) { sw_copy_rect(sx, sy, dx, dy, w, h); REC(OP_COPY, sx, sy, dx, dy, w, h); }
+static void t_fill(int x, int y, int w, int h, uint16_t c) {
+    sw_fill_rect(x, y, w, h, c); stale_clear_rect(x, y, w, h); REC(OP_FILL, x, y, w, h, c);
+}
+static void t_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    sw_copy_rect(sx, sy, dx, dy, w, h);
+    if (w > 0 && h > 0) {
+        if (stale_any(sx, sy, w, h)) { stale_set(dx, dy, dx + w - 1, dy + h - 1, 1, 0); s_stale_area[0] = -1; }
+        else stale_clear_rect(dx, dy, w, h);
+    }
+    REC(OP_COPY, sx, sy, dx, dy, w, h);
+}
 static void t_flat_tri(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t c) {
     if (!s_skip_raster) sw_draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);
     bd_sync(); REC(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
@@ -705,6 +804,7 @@ static uint16_t t_read(int x, int y) { return sw_vram_read(x, y); }
 static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d) {
     sw_vram_transfer_in(x, y, w, h, d);
     if (w <= 0 || h <= 0) return;
+    stale_clear_rect(x, y, w, h);
     const uint32_t px = (uint32_t)w * (uint32_t)h;
     int32_t *p = (int32_t *)rec_begin(OP_XFER_IN, 16u + px * 2u);
     if (!p) return;
@@ -803,6 +903,8 @@ int swt_publish(const uint32_t *px, int w, int h, int logical_w, int dst_w,
 
 /* The authoritative VRAM was replaced (savestate load): copy it whole. */
 static void t_vram_restored(void) {
+    memset(s_stale, 0, sizeof s_stale);
+    s_stale_area[0] = -1;
     t_xfer_in(0, 0, 1024, 512, s_vram);
 }
 
