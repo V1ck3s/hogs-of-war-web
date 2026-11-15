@@ -651,6 +651,9 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
                                     uint32_t count,
                                     uint32_t expected_crc) {
     extern uint32_t g_overlay_watch_epoch;
+    static int memo_on = -1;
+    if (memo_on < 0) { const char *e = getenv("PSX_OVERLAY_MEMO"); memo_on = !(e && e[0] == '0'); }
+    if (!memo_on) return static_code_matches_full(lo_len_pairs, count, expected_crc);
     const uint32_t epoch = g_overlay_watch_epoch;
     StaticMatchMemo *m = &s_static_match_memo[(((uintptr_t)lo_len_pairs >> 3) ^ expected_crc) &
                                               (STATIC_MATCH_MEMO_CAP - 1u)];
