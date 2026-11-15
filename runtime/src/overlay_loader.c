@@ -631,7 +631,44 @@ static uint64_t s_static_match_rehashes = 0;
 static uint64_t s_static_match_crc_misses = 0;
 static uint64_t s_static_match_gen_fastpath = 0;
 
+/* Direct-mapped memo in front of the page-generation cache: a variant's last
+ * answer, valid while no watched page has been written since (global epoch,
+ * memory.c). Same answers as the full path, which it only skips when every
+ * page-generation sum is provably unchanged. */
+#define STATIC_MATCH_MEMO_CAP 4096u
+typedef struct {
+    const uint32_t *ranges;
+    uint32_t expected_crc;
+    uint32_t epoch;
+    int      matches;
+} StaticMatchMemo;
+static StaticMatchMemo s_static_match_memo[STATIC_MATCH_MEMO_CAP];
+static uint64_t s_static_match_memo_hits;
+static int static_code_matches_full(const uint32_t *lo_len_pairs, uint32_t count,
+                                    uint32_t expected_crc);
+
 int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
+                                    uint32_t count,
+                                    uint32_t expected_crc) {
+    extern uint32_t g_overlay_watch_epoch;
+    const uint32_t epoch = g_overlay_watch_epoch;
+    StaticMatchMemo *m = &s_static_match_memo[(((uintptr_t)lo_len_pairs >> 3) ^ expected_crc) &
+                                              (STATIC_MATCH_MEMO_CAP - 1u)];
+    if (m->ranges == lo_len_pairs && m->expected_crc == expected_crc && m->epoch == epoch) {
+        s_static_match_memo_hits++;
+        return m->matches;
+    }
+    const int r = static_code_matches_full(lo_len_pairs, count, expected_crc);
+    /* Validation arms page watches but never advances a generation, so the
+     * epoch read before it still describes the bytes it judged. */
+    m->ranges = lo_len_pairs;
+    m->expected_crc = expected_crc;
+    m->epoch = epoch;
+    m->matches = r;
+    return r;
+}
+
+static int static_code_matches_full(const uint32_t *lo_len_pairs,
                                     uint32_t count,
                                     uint32_t expected_crc) {
     const uint8_t *ram = memory_get_ram_ptr();

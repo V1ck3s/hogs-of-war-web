@@ -295,6 +295,10 @@ static int ws_gameplay_state_matches(void) {
         if (state == ws_gameplay_state_values[i]) return 1;
     return 0;
 }
+/* 1 while the title's configured gameplay state ([widescreen]
+ * gameplay_state_addr / gameplay_state_values) holds, 0 otherwise or when the
+ * title configures none. */
+int gpu_ws_gameplay_state_active(void) { return ws_gameplay_state_matches() == 1; }
 
 /* World-scale 3D signal for the 2D-only-scene classifier (sprite-tag titles).
  * Shaded-prim presence proved to be a FALSE world signal: task-clear /
@@ -5183,6 +5187,12 @@ static void gp0_exec_vram_to_cpu(void) {
     vram_read_col = 0;
     vram_read_row = 0;
     vram_read_active = 1;
+#if defined(PSX_WEB)
+    {   /* The game reads VRAM back: its drawn content must be rasterized. */
+        extern void swt_vram_readback_begin(void);
+        swt_vram_readback_begin();
+    }
+#endif
 }
 
 /* Determine how many words a GP0 command requires (header only, not counting

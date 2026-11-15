@@ -812,6 +812,9 @@ void dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count) {
  */
 static uint32_t overlay_watch_bitmap[DIRTY_RAM_BITMAP_WORDS];
 static uint32_t overlay_page_gen[DIRTY_RAM_PAGE_COUNT];
+/* Advances with every overlay_page_gen bump (any watched page): while it holds
+ * still, no page-generation sum can have changed. */
+uint32_t g_overlay_watch_epoch;
 
 void dirty_ram_reset_for_boot(void) {
     memset(dirty_ram_bitmap, 0, sizeof(dirty_ram_bitmap));
@@ -906,6 +909,7 @@ void dirty_ram_text_guard_resync_after_restore(void) {
 void overlay_watch_invalidate_after_ram_restore(void) {
     for (uint32_t pg = 0; pg < DIRTY_RAM_PAGE_COUNT; pg++)
         overlay_page_gen[pg]++;
+    g_overlay_watch_epoch++;
     extern void overlay_loader_note_code_write(void);
     extern void overlay_loader_resync_validation_after_restore(void);
     overlay_loader_note_code_write();
@@ -932,6 +936,7 @@ static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {
     }
     if ((overlay_watch_bitmap[pg >> 5] >> (pg & 31u)) & 1u) {
         overlay_page_gen[pg]++;
+        g_overlay_watch_epoch++;
         /* Also invalidate generation-aware negative overlay lookups: bytes in
          * a manifested code page may now match a previously absent variant.
          * Keep this separate from g_dirty_ram_code_gen: interpreter widescreen

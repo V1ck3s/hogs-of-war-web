@@ -547,6 +547,49 @@ static void bd_sync(void) {
 
 static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d);
 
+/* Online build (PSX_WEB_SKIP_NATIVE_RASTER=1, same for every participant):
+ * the picture is drawn by the presentation side from the ring, so the
+ * emulation thread's native rasterization only matters to a game that reads
+ * VRAM back (GP0 C0h). While the title's gameplay state holds ([widescreen]
+ * gameplay_state_addr, sampled once per frame) with the native-wide view on,
+ * primitives are not rasterized into the authoritative VRAM (transfers, fills
+ * and copies still are) — once QUIET_FRAMES frames of gameplay have gone by
+ * without a read-back. Games read the screen back around transitions (wipes,
+ * the first frames of a level), so menus, loading and the start of gameplay
+ * always rasterize, and any read-back re-arms the wait. The decision depends
+ * only on guest state, so every participant takes it at the same instruction
+ * and all copies of the game stay identical. */
+#define QUIET_FRAMES 300u
+static int s_skip_raster_cfg;
+static uint32_t s_quiet;             /* gameplay frames since the last read-back */
+static int s_gameplay;               /* configured gameplay state, sampled per frame */
+int gpu_ws_gameplay_state_active(void);
+#define s_skip_raster (s_skip_raster_cfg && s_gameplay && s_wide_w > 0 && s_quiet >= QUIET_FRAMES && (++s_skipped_prims, 1))
+static uint32_t s_readbacks, s_skipped_prims;
+void swt_vram_readback_begin(void) { s_quiet = 0; s_readbacks++; }
+/* Page-side probe (tests): [0] skip configured, [1] wide width, [2] read-back
+ * -free gameplay frames, [3] read-backs so far, [4] primitives not
+ * rasterized; [1] has bit 31 set during gameplay. */
+EMSCRIPTEN_KEEPALIVE uint32_t swt_probe(int i) {
+    switch (i) {
+    case 0: return (uint32_t)s_skip_raster_cfg;
+    case 1: return (uint32_t)(s_wide_w | (s_gameplay << 31));
+    case 2: return s_quiet;
+    case 3: return s_readbacks;
+    case 4: return s_skipped_prims;
+    case 5: { extern uint64_t g_dirty_ram_insns_run; return (uint32_t)g_dirty_ram_insns_run; }
+    case 6: {   /* static overlay dispatches served */
+        extern void psx_overlay_static_get_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *)
+            __attribute__((weak));
+        uint64_t hits = 0;
+        if (psx_overlay_static_get_stats) psx_overlay_static_get_stats(NULL, &hits, NULL, NULL);
+        return (uint32_t)hits;
+    }
+    default: return 0;
+    }
+}
+int swt_active(void) { return s_started; }
+
 static void resync(void) {
     REC(OP_SCALE, s_scale);
     REC(OP_FILTER, s_filter);
@@ -569,6 +612,8 @@ static void t_init(uint16_t *vram) {
     s_vram = vram;
     sw_renderer_init(vram);
     if (!s_started) {
+        const char *skip = getenv("PSX_WEB_SKIP_NATIVE_RASTER");
+        s_skip_raster_cfg = skip && skip[0] == '1';
         const char *gl = getenv("PSX_WEB_GL");
         s_gl_mode = gl && gl[0] == '1';
         s_ring = (uint8_t *)malloc(RING_BYTES);
@@ -615,44 +660,44 @@ static void t_persp(int e, float q0, float q1, float q2) {
 static void t_fill(int x, int y, int w, int h, uint16_t c) { sw_fill_rect(x, y, w, h, c); REC(OP_FILL, x, y, w, h, c); }
 static void t_copy(int sx, int sy, int dx, int dy, int w, int h) { sw_copy_rect(sx, sy, dx, dy, w, h); REC(OP_COPY, sx, sy, dx, dy, w, h); }
 static void t_flat_tri(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t c) {
-    sw_draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);
+    if (!s_skip_raster) sw_draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);
     bd_sync(); REC(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
 }
 static void t_gour_tri(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1, int x2, int y2, uint16_t c2) {
-    sw_draw_gouraud_triangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
+    if (!s_skip_raster) sw_draw_gouraud_triangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
     bd_sync(); REC(OP_GOUR_TRI, x0, y0, c0, x1, y1, c1, x2, y2, c2);
 }
 static void t_tex_tri(int x0, int y0, int u0, int v0, int x1, int y1, int u1, int v1,
                       int x2, int y2, int u2, int v2, uint16_t cx, uint16_t cy, uint16_t tp) {
-    sw_draw_textured_triangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
+    if (!s_skip_raster) sw_draw_textured_triangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
     bd_sync(); REC(OP_TEX_TRI, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
 }
 static void t_stex_tri(int x0, int y0, int u0, int v0, uint32_t c0, int x1, int y1, int u1, int v1, uint32_t c1,
                        int x2, int y2, int u2, int v2, uint32_t c2, uint16_t cx, uint16_t cy, uint16_t tp, int raw) {
-    sw_draw_shaded_textured_triangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1, x2, y2, u2, v2, c2, cx, cy, tp, raw);
+    if (!s_skip_raster) sw_draw_shaded_textured_triangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1, x2, y2, u2, v2, c2, cx, cy, tp, raw);
     bd_sync();
     REC(OP_STEX_TRI, x0, y0, u0, v0, (int32_t)c0, x1, y1, u1, v1, (int32_t)c1,
         x2, y2, u2, v2, (int32_t)c2, cx, cy, tp, raw);
 }
 static void t_flat_rect(int x, int y, int w, int h, uint16_t c) {
-    sw_draw_flat_rect(x, y, w, h, c);
+    if (!s_skip_raster) sw_draw_flat_rect(x, y, w, h, c);
     bd_sync(); REC(OP_FLAT_RECT, x, y, w, h, c);
 }
 static void t_tex_rect(int x, int y, int w, int h, int u, int v, uint16_t cx, uint16_t cy, uint16_t tp) {
-    sw_draw_textured_rect(x, y, w, h, u, v, cx, cy, tp);
+    if (!s_skip_raster) sw_draw_textured_rect(x, y, w, h, u, v, cx, cy, tp);
     bd_sync(); REC(OP_TEX_RECT, x, y, w, h, u, v, cx, cy, tp);
 }
 static void t_tex_rect_scaled(int x, int y, int w, int h, int u0, int v0, int u1, int v1,
                               uint16_t cx, uint16_t cy, uint16_t tp) {
-    sw_draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
+    if (!s_skip_raster) sw_draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
     bd_sync(); REC(OP_TEX_RECT_SCALED, x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
 }
 static void t_line(int x0, int y0, int x1, int y1, uint16_t c) {
-    sw_draw_line(x0, y0, x1, y1, c);
+    if (!s_skip_raster) sw_draw_line(x0, y0, x1, y1, c);
     bd_sync(); REC(OP_LINE, x0, y0, x1, y1, c);
 }
 static void t_sline(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
-    sw_draw_shaded_line(x0, y0, c0, x1, y1, c1);
+    if (!s_skip_raster) sw_draw_shaded_line(x0, y0, c0, x1, y1, c1);
     bd_sync(); REC(OP_SLINE, x0, y0, c0, x1, y1, c1);
 }
 static void t_pixel(int x, int y, uint16_t p) { sw_vram_write(x, y, p); REC(OP_PIXEL, x, y, p); }
@@ -686,6 +731,11 @@ static void t_wide_conf(int w, int off) {
 }
 static void t_wide_target(int base) {
     if (s_wide_w) { note_base(base); s_wide_target = 1; }
+    /* Once per frame (the game picks its draw buffer): gameplay on or off.
+     * Leaving gameplay re-arms the skip for the next time. */
+    s_gameplay = gpu_ws_gameplay_state_active();
+    if (!s_gameplay) s_quiet = 0;
+    else if (s_quiet < QUIET_FRAMES) s_quiet++;
     s_sh_target = base;
     REC(OP_WIDE_TARGET, base);
 }

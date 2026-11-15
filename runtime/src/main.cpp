@@ -27,6 +27,7 @@
 #include "psx_lockstep.h"
 #if defined(PSX_WEB)
 extern "C" void psx_web_publish_frame(const uint32_t *, int, int, int, int, int, int, int);
+extern "C" int swt_active(void);
 #endif
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
@@ -7493,7 +7494,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (!wide_present) {
             /* Never hires-present under netplay CPU-auth (even if settings say
              * 4× — that preference is offline-only). */
-            if (active_scale > 1 && !netplay_cpu_auth_gpu()) {
+#if defined(PSX_WEB)
+            /* Threaded browser renderer: the picture always comes from the
+             * presentation side (also at 1x: the emulation thread may not
+             * rasterize at all, see gpu_sw_threaded.c). */
+            const bool web_deferred = swt_active() && !di.depth24;
+#else
+            const bool web_deferred = false;
+#endif
+            if ((active_scale > 1 || web_deferred) && !netplay_cpu_auth_gpu()) {
                 int sw = (int)present_w * active_scale;
                 gr_render_display_hires(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
                                         (int)di.display_x, (int)di.display_y,
