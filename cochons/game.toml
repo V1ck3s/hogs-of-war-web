@@ -318,10 +318,11 @@ entries = ["0x80040FE4", "0x80046E70", "0x80047A9C", "0x80047DB8", "0x80047F9C",
 # aspect from 4:3 to 21:9 by resizing the game window.
 [widescreen]
 native_wide = false
-# Native-wide (online): the battle sky is three full-width gradient bands,
-# the top one 58 px tall; stretch bands from 40 px up so the top corners of
-# a wide view are sky too (no black squares).
-nw_backdrop_min_height = 40
+# Native-wide (online): the battle sky is three full-width gradient bands
+# whose heights follow the camera pitch (the top one is 38 px or less when
+# looking down); stretch every band, however thin, so the top corners of a
+# wide view are sky too (no black squares, no leftovers of earlier frames).
+nw_backdrop_min_height = 1
 gameplay_state_addr = "0x8002AA50"
 gameplay_state_values = ["0x80042768"]
 gte_game_mode = true
