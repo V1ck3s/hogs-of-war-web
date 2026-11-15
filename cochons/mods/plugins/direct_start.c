@@ -7,8 +7,12 @@
  * else:
  *   - the logo videos (INFOGRAM.SXA, SHEFF.SXA) and the boot's INTRO.SXA +
  *     CUTIN.SXA end at once, through the game's own "skip videos" flag (a
- *     campaign started later still gets its cutscenes); the title picture
- *     is not shown (its call returns at once: it only displays and waits);
+ *     campaign started later still gets its cutscenes). The title picture
+ *     (0x80017A70) still runs, behind the page's splash: between its fade in
+ *     and fade out it performs the disc's LibCrypt check (0x80017D9C, keyed
+ *     from the subchannel data of the SBI companion). Skipping it left the
+ *     key unset, and the game then sabotaged itself a few minutes into a
+ *     battle (endless recursion from 0x800FB6E0, magic 0x67676767);
  *   - the boot path of the menu session no longer shows "Appuyer sur la
  *     touche START", and opens, instead of the main menu (menu 1):
  *       solo:  UN JOUEUR (menu 14);
@@ -42,7 +46,7 @@
 
 /* Main EXE (compiled). */
 #define FN_PLAY_STREAM  0x80011DE4u /* play a .SXA video: (name, flags) */
-#define FN_TITLE        0x80017A70u /* title picture, waits for Start */
+#define FN_TITLE        0x80017A70u /* title picture + LibCrypt check: runs as is */
 #define NAME_INFOGRAM   0x800103ACu
 #define NAME_SHEFF      0x800103BCu
 #define NAME_INTRO      0x800103C8u /* INTRO.SXA */
@@ -263,11 +267,6 @@ static int patch(uint32_t address, uint32_t expected, uint32_t replacement) {
     return 1;
 }
 
-static void skip_call(CPUState *cpu) {
-    cpu->gpr[2] = 0;
-    psx_mod_function_return(cpu);
-}
-
 /* The boot videos are played and skipped the way a player skips them: the
  * player's poll callback (0x80017988) ends a video when the "skip videos"
  * flag is set (it is what holding the skip button does). Their setup and
@@ -281,11 +280,6 @@ static void hook_play_stream(CPUState *cpu, uint32_t address) {
         (name == NAME_INTRO && ra == RA_INTRO) ||
         (name == NAME_CUTIN && ra == RA_CUTIN))
         psx_mod_write_word(G_SKIP_VIDEOS, 1u);
-}
-
-static void hook_title(CPUState *cpu, uint32_t address) {
-    (void)address;
-    if (active() && psx_mod_function_can_return()) skip_call(cpu);
 }
 
 static void hook_menus(CPUState *cpu, uint32_t address) {
@@ -304,6 +298,5 @@ static void hook_menus(CPUState *cpu, uint32_t address) {
 
 PSX_MOD_CONSTRUCTOR(frontschweine_register_direct_start_plugin) {
     (void)psx_mod_register_function_entry_plugin(PLUGIN_ID, FN_PLAY_STREAM, hook_play_stream);
-    (void)psx_mod_register_function_entry_plugin(PLUGIN_ID, FN_TITLE, hook_title);
     (void)psx_mod_register_function_entry_plugin(PLUGIN_ID, FN_MENUS, hook_menus);
 }
