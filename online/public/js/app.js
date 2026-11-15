@@ -311,6 +311,10 @@ async function startGame(go) {
         PSX_WEB_PLAYERS: String(go.players.length),
         PSX_WEB_CPUS: String(go.cpus | 0),
         ...(gpu ? { PSX_WEB_GL: '1' } : {}),
+        // The picture is drawn from the command ring (graphics card or
+        // presentation thread): the emulation thread skips rasterizing until
+        // the game reads VRAM back. Same for every participant (lockstep).
+        PSX_WEB_SKIP_NATIVE_RASTER: params.get('raster') === '1' ? '0' : '1',
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
         ...(params.get('diag') ? { PSX_RUNTIME_PERF_DIAG: '1', PSX_RUNTIME_PERF_DIAG_MS: '5000' } : {}),
