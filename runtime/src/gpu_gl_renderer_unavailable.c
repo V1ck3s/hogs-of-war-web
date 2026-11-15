@@ -1,16 +1,14 @@
-/* WebAssembly build: no desktop OpenGL backend. Every entry point of
- * gpu_gl_renderer.h is an inert default; the software renderer presents. */
+/* WebAssembly build: no desktop OpenGL backend for the runtime. Every entry
+ * point of gpu_gl_renderer.h is an inert default (the emulation thread draws
+ * with the software renderer); the page-side WebGL presentation uses its own
+ * renamed build of gpu_gl_renderer.c (gpu_gl_web_shim.h). */
 #include "gpu_gl_renderer.h"
 #include "gpu_render.h"
 
 #include <string.h>
 
-int g_ws_bd_stretch_on = 1;
-int g_ws_bd_stretch_pct = 0;
-int g_ws_bd_phase_thresh = 24;
-int g_ws_bd_phase_mode = 1;
-int g_bdg_applied = 0, g_bdg_prims = 0, g_bdg_clearx = -999999;
-int g_bdg_cur = 0, g_bdg_base = 0, g_bdg_w = 0, g_bdg_off = 0;
+/* The backdrop-stretch globals (g_ws_bd_*, g_bdg_*) come from the WebGL build
+ * of gpu_gl_renderer.c, which is also linked (page-side presentation). */
 
 int gl_renderer_init_context(struct SDL_Window *win) { (void)win; return 0; }
 int gl_renderer_select_texture_bank(uint16_t id) { (void)id; return 0; }

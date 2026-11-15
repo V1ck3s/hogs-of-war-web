@@ -63,6 +63,9 @@
  * returns 0 and the runtime falls back to the pure software renderer — no
  * half-GL hybrid. */
 
+#if defined(PSX_WEB)
+#include "gpu_gl_web_shim.h"   /* WebGL 2 presentation replay (gpu_gl_web.c) */
+#endif
 #include "gpu.h"
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
@@ -77,7 +80,10 @@
 #include "psx_rewind.h"
 
 #include "psx_sdl.h"
-#if defined(PSX_SDL3)
+#if defined(PSX_WEB)
+#include <GLES3/gl3.h>
+#include <emscripten/html5.h>
+#elif defined(PSX_SDL3)
 #include <SDL3/SDL_opengl.h>
 #else
 #include <SDL_opengl.h>
@@ -255,6 +261,48 @@ static PFN_glBindRenderbuffer  p_glBindRenderbuffer;
 static PFN_glRenderbufferStorage p_glRenderbufferStorage;
 static PFN_glFramebufferRenderbuffer p_glFramebufferRenderbuffer;
 
+#if defined(PSX_WEB)
+/* WebGL 2: the entry points are the GLES 3.0 functions themselves. No
+ * dual-source blending (the two-pass semi path is used) and no GPU timer. */
+static int load_modern_gl(void) {
+#define LOADW(p, f) p = (void *)&f
+    LOADW(p_glCreateShader, glCreateShader);   LOADW(p_glShaderSource, glShaderSource);
+    LOADW(p_glCompileShader, glCompileShader); LOADW(p_glGetShaderiv, glGetShaderiv);
+    LOADW(p_glGetShaderInfoLog, glGetShaderInfoLog); LOADW(p_glDeleteShader, glDeleteShader);
+    LOADW(p_glCreateProgram, glCreateProgram); LOADW(p_glAttachShader, glAttachShader);
+    LOADW(p_glLinkProgram, glLinkProgram);     LOADW(p_glGetProgramiv, glGetProgramiv);
+    LOADW(p_glGetProgramInfoLog, glGetProgramInfoLog); LOADW(p_glUseProgram, glUseProgram);
+    LOADW(p_glGetUniformLocation, glGetUniformLocation); LOADW(p_glUniform1i, glUniform1i);
+    LOADW(p_glUniform1f, glUniform1f);
+    LOADW(p_glUniform2i, glUniform2i); LOADW(p_glUniform4i, glUniform4i);
+    LOADW(p_glUniform2f, glUniform2f);
+    LOADW(p_glUniform4f, glUniform4f);
+    LOADW(p_glBlendColor, glBlendColor);
+    LOADW(p_glBlendFuncSeparate, glBlendFuncSeparate);
+    LOADW(p_glBlendEquationSeparate, glBlendEquationSeparate);
+    LOADW(p_glGenVertexArrays, glGenVertexArrays); LOADW(p_glBindVertexArray, glBindVertexArray);
+    LOADW(p_glActiveTexture, glActiveTexture);  LOADW(p_glGenBuffers, glGenBuffers);
+    LOADW(p_glBindBuffer, glBindBuffer);        LOADW(p_glBufferData, glBufferData);
+    LOADW(p_glVertexAttribPointer, glVertexAttribPointer);
+    LOADW(p_glEnableVertexAttribArray, glEnableVertexAttribArray);
+    p_glBindFragDataLocationIndexed = NULL;
+    LOADW(p_glGenFramebuffers, glGenFramebuffers); LOADW(p_glBindFramebuffer, glBindFramebuffer);
+    LOADW(p_glDeleteFramebuffers, glDeleteFramebuffers);
+    LOADW(p_glFramebufferTexture2D, glFramebufferTexture2D);
+    LOADW(p_glCheckFramebufferStatus, glCheckFramebufferStatus);
+    LOADW(p_glBlitFramebuffer, glBlitFramebuffer);
+    LOADW(p_glGenRenderbuffers, glGenRenderbuffers);
+    LOADW(p_glDeleteRenderbuffers, glDeleteRenderbuffers);
+    LOADW(p_glBindRenderbuffer, glBindRenderbuffer);
+    LOADW(p_glRenderbufferStorage, glRenderbufferStorage);
+    LOADW(p_glFramebufferRenderbuffer, glFramebufferRenderbuffer);
+#undef LOADW
+    p_glGenQueries = NULL; p_glDeleteQueries = NULL; p_glBeginQuery = NULL;
+    p_glEndQuery = NULL; p_glGetQueryObjectui64v = NULL; p_glGetQueryObjectiv = NULL;
+    p_glQueryCounter = NULL;
+    return 1;
+}
+#else
 static int load_modern_gl(void) {
     int ok = 1;
 #define LOAD(p, n) do { p = (void *)SDL_GL_GetProcAddress(n); if (!p) ok = 0; } while (0)
@@ -300,6 +348,7 @@ static int load_modern_gl(void) {
 #undef LOAD
     return ok;
 }
+#endif
 
 /* ---- state ------------------------------------------------------------- */
 static SDL_Window   *s_win = NULL;
@@ -1244,10 +1293,50 @@ static const char *STENCIL_FS =
     "void main(){ vec4 c=texelFetch(u_src,ivec2(gl_FragCoord.xy),0);\n"
     "  if(c.a<0.5) discard; frag=vec4(0.0); }\n";
 
+#if defined(PSX_WEB)
+/* GLSL 3.30 -> GLSL ES 3.00: version line + default precisions; noperspective
+ * dropped (every vertex is emitted with w = 1, so linear and perspective
+ * interpolation are the same); with two colour outputs ES requires explicit
+ * locations (the second is unused: no dual-source blending in WebGL). */
+static char *web_shader_source(const char *src) {
+    static const char HEAD[] = "#version 300 es\n"
+        "precision highp float;\nprecision highp int;\n"
+        "precision highp usampler2D;\nprecision highp sampler2D;\n";
+    const char *body = strncmp(src, "#version 330\n", 13) == 0 ? src + 13 : src;
+    size_t n = strlen(body);
+    char *out = (char *)malloc(sizeof HEAD + n + 64);
+    if (!out) return NULL;
+    char *o = out;
+    memcpy(o, HEAD, sizeof HEAD - 1); o += sizeof HEAD - 1;
+    const int two_outs = strstr(body, "out vec4 blend_factor;") != NULL;
+    for (const char *p = body; *p; ) {
+        if (strncmp(p, "noperspective ", 14) == 0) { p += 14; continue; }
+        if (two_outs && strncmp(p, "out vec4 frag;", 14) == 0) {
+            static const char R[] = "layout(location=0) out vec4 frag;";
+            memcpy(o, R, sizeof R - 1); o += sizeof R - 1; p += 14; continue;
+        }
+        if (two_outs && strncmp(p, "out vec4 blend_factor;", 22) == 0) {
+            static const char R[] = "layout(location=1) out vec4 blend_factor;";
+            memcpy(o, R, sizeof R - 1); o += sizeof R - 1; p += 22; continue;
+        }
+        *o++ = *p++;
+    }
+    *o = 0;
+    return out;
+}
+#endif
 static GLuint compile_shader(GLenum type, const char *src) {
+#if defined(PSX_WEB)
+    char *web_src = web_shader_source(src);
+    if (!web_src) return 0;
+    src = web_src;
+#endif
     GLuint s = p_glCreateShader(type);
     p_glShaderSource(s, 1, &src, NULL);
     p_glCompileShader(s);
+#if defined(PSX_WEB)
+    free(web_src);
+#endif
     GLint ok = 0; p_glGetShaderiv(s, PSXGL_COMPILE_STATUS, &ok);
     if (!ok) { char log[1024]; log[0]=0; p_glGetShaderInfoLog(s, sizeof log, NULL, log);
         fprintf(stdout, "psxrecomp: GL shader compile failed: %s\n", log);
@@ -1259,7 +1348,7 @@ static GLuint build_program_ex(const char *vs, const char *fs, int dual_source) 
     if (!v || !f) return 0;
     GLuint p = p_glCreateProgram();
     p_glAttachShader(p, v); p_glAttachShader(p, f);
-    if (dual_source) {
+    if (dual_source && p_glBindFragDataLocationIndexed) {
         p_glBindFragDataLocationIndexed(p, 0, 0, "frag");
         p_glBindFragDataLocationIndexed(p, 0, 1, "blend_factor");
     }
@@ -2088,7 +2177,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         int batch_semi;
         if (semi < 0)
             batch_semi = -1;
-        else if (!s_mask_check && semi != 2)
+        else if (!s_mask_check && semi != 2 && p_glBindFragDataLocationIndexed)
             batch_semi = 4;
         else
             batch_semi = semi;
@@ -4648,3 +4737,135 @@ static const GpuRenderBackend GL_BACKEND = {
 };
 
 const GpuRenderBackend *gl_backend_get(void) { return &GL_BACKEND; }
+
+#if defined(PSX_WEB)
+/* ---- browser presentation (WebGL 2, page main thread) --------------------
+ * gpu_sw_threaded.c replays the emulation thread's GPU commands into this
+ * renderer (dual-raster: drawn on the GPU only, never read back) and asks for
+ * the displayed buffer to be drawn straight onto the canvas. */
+static EMSCRIPTEN_WEBGL_CONTEXT_HANDLE s_web_ctx;
+static GLuint s_web_prog, s_web_vao, s_web_pix_tex;
+static GLint  s_web_uTex, s_web_uUv, s_web_uBgr;
+static int    s_web_pix_w, s_web_pix_h;
+
+static const char *WEB_PRESENT_VS =
+    "#version 330\n"
+    "out vec2 v_uv;\n"
+    "uniform vec4 u_uv;   /* u0 v0 (top-left) u1 v1 (bottom-right) */\n"
+    "void main(){ vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1);\n"
+    "  v_uv = vec2(mix(u_uv.x, u_uv.z, p.x), mix(u_uv.w, u_uv.y, p.y));\n"
+    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
+static const char *WEB_PRESENT_FS =
+    "#version 330\n"
+    "in vec2 v_uv; uniform sampler2D u_tex; uniform int u_bgr; out vec4 frag;\n"
+    "void main(){ vec3 c = texture(u_tex, v_uv).rgb;\n"
+    "  frag = vec4(u_bgr != 0 ? c.bgr : c, 1.0); }\n";
+
+int gl_web_init(const char *canvas, uint16_t *vram, int scale) {
+    if (s_raster_ok) return 1;
+    EmscriptenWebGLContextAttributes a;
+    emscripten_webgl_init_context_attributes(&a);
+    a.alpha = 0; a.depth = 0; a.stencil = 0; a.antialias = 0;
+    a.premultipliedAlpha = 0; a.preserveDrawingBuffer = 0;
+    a.powerPreference = EM_WEBGL_POWER_PREFERENCE_HIGH_PERFORMANCE;
+    a.majorVersion = 2; a.minorVersion = 0;
+    a.enableExtensionsByDefault = 1;
+    s_web_ctx = emscripten_webgl_create_context(canvas, &a);
+    if (s_web_ctx <= 0) return 0;
+    if (emscripten_webgl_make_context_current(s_web_ctx) != EMSCRIPTEN_RESULT_SUCCESS) return 0;
+    load_modern_gl();
+    s_ctx = (SDL_GLContext)(intptr_t)s_web_ctx;
+    s_cpu_auth_dual = 1;           /* GPU = picture only; the CPU VRAM is authoritative */
+    if (scale < 1) scale = 1;
+    if (scale > GL_MAX_INTERNAL_SCALE) scale = GL_MAX_INTERNAL_SCALE;
+    s_req_scale = scale;
+    glb_init(vram);
+    glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+    s_web_prog = build_program(WEB_PRESENT_VS, WEB_PRESENT_FS);
+    if (!s_web_prog || !init_gpu_raster()) { s_raster_ok = 0; return 0; }
+    s_web_uTex = p_glGetUniformLocation(s_web_prog, "u_tex");
+    s_web_uUv  = p_glGetUniformLocation(s_web_prog, "u_uv");
+    s_web_uBgr = p_glGetUniformLocation(s_web_prog, "u_bgr");
+    p_glGenVertexArrays(1, &s_web_vao);
+    glGenTextures(1, &s_web_pix_tex);
+    glBindTexture(GL_TEXTURE_2D, s_web_pix_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return 1;
+}
+
+int gl_web_scale(void) { return s_raster_ok ? s_scale : 0; }
+
+/* Draws texels [x, x+w) x [y, y+h) of tex (tw x th) into the canvas rect
+ * (vx, vy, vw, vh), y from the canvas top; clears the canvas around it. */
+static void web_draw(GLuint tex, int tw, int th, int x, int y, int w, int h,
+                     int cw, int ch, int vx, int vy, int vw, int vh, int linear, int bgr) {
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST); glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, cw, ch);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(vx, ch - vy - vh, vw, vh);
+    p_glUseProgram(s_web_prog);
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    p_glUniform1i(s_web_uTex, 0);
+    p_glUniform1i(s_web_uBgr, bgr);
+    p_glUniform4f(s_web_uUv, ((float)x + 0.5f) / (float)tw, ((float)y + 0.5f) / (float)th,
+                  ((float)(x + w) - 0.5f) / (float)tw, ((float)(y + h) - 0.5f) / (float)th);
+    p_glBindVertexArray(s_web_vao);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    p_glBindVertexArray(0);
+    p_glUseProgram(0);
+}
+
+/* kind 0: hi-res VRAM rect (dx, dy, dw, dh native px); kind 1: native-wide
+ * surface of buffer dx, rows dy .. dy+dh. Returns 0 if there is no picture. */
+int gl_web_present(int kind, int dx, int dy, int dw, int dh,
+                   int cw, int ch, int vx, int vy, int vw, int vh, int linear) {
+    if (!s_raster_ok) return 0;
+    flush_flat_batch();
+    flush_tex_batch();
+    flush_cpu_upload();
+    const int S = s_scale;
+    if (kind == 1) {
+        GLuint fbo = 0, tex = 0;
+        for (int i = 0; i < WIDE_MAX_SURF; i++)
+            if (s_wide_fbo[i] && s_wide_base[i] == dx) { fbo = s_wide_fbo[i]; tex = s_wide_tex[i]; break; }
+        if (!fbo || g_wide_w <= 0) return 0;
+        wide_blit_center(fbo, dx, dy, dh);
+        web_draw(tex, g_wide_w * S, VRAM_H * S, 0, dy * S, g_wide_w * S, dh * S,
+                 cw, ch, vx, vy, vw, vh, linear, 0);
+    } else {
+        web_draw(s_hr_tex, VRAM_W * S, VRAM_H * S, dx * S, dy * S, dw * S, dh * S,
+                 cw, ch, vx, vy, vw, vh, linear, 0);
+    }
+    return 1;
+}
+
+/* A finished picture from the emulation thread (ARGB words), e.g. 24-bit FMV. */
+int gl_web_present_pixels(const uint32_t *px, int w, int h,
+                          int cw, int ch, int vx, int vy, int vw, int vh, int linear) {
+    if (!s_raster_ok || w <= 0 || h <= 0) return 0;
+    glBindTexture(GL_TEXTURE_2D, s_web_pix_tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei(PSXGL_UNPACK_ROW_LENGTH, 0);
+    if (w != s_web_pix_w || h != s_web_pix_h) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        s_web_pix_w = w; s_web_pix_h = h;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    }
+    web_draw(s_web_pix_tex, w, h, 0, 0, w, h, cw, ch, vx, vy, vw, vh, linear, 1);
+    return 1;
+}
+
+/* Replays one recorded primitive's backdrop gate (gpu_gl_web.c). */
+extern int g_swg_in_backdrop, g_swg_tagged;
+void gl_web_set_prim_gate(int in_backdrop, int tagged) {
+    g_swg_in_backdrop = in_backdrop; g_swg_tagged = tagged;
+}
+#endif

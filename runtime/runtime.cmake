@@ -597,12 +597,14 @@ endif()
 if(EMSCRIPTEN)
     # Browsers cannot execute host machine code produced at run time: the
     # recompiled code is all ahead-of-time; gaps use the dirty-RAM interpreter.
+    # The OpenGL renderer is built for WebGL 2 as the page-side presentation
+    # replay (gpu_gl_web_shim.h); gpu_gl_web.c is its replay-side VRAM copy.
     list(REMOVE_ITEM PSXRECOMP_RUNTIME_SOURCES
-        ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
         ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
         ${PSXRECOMP_ROOT}/runtime/src/crash_trace.c
         ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c)
     list(APPEND PSXRECOMP_RUNTIME_SOURCES
+        ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_web.c
         ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer_unavailable.c
         ${PSXRECOMP_ROOT}/runtime/src/psx_fiber_single_context.c
         ${PSXRECOMP_ROOT}/runtime/src/crash_trace_web.c
@@ -1792,6 +1794,10 @@ function(psxrecomp_add_runtime_target target)
             "--use-port=sdl2"
             "-pthread"
             "-sPROXY_TO_PTHREAD=1"
+            # WebGL 2 for the page-side GPU presentation (gpu_sw_threaded.c).
+            "--js-library=${PSXRECOMP_ROOT}/runtime/src/web_stdio.js"
+            "-sMIN_WEBGL_VERSION=2"
+            "-sMAX_WEBGL_VERSION=2"
             "-sPTHREAD_POOL_SIZE=3"
             "-sALLOW_MEMORY_GROWTH=1"
             "-sINITIAL_MEMORY=402653184"

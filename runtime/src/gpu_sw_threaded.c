@@ -23,9 +23,18 @@
  * Presents are deferred: render_display_hires / render_wide_display queue a
  * read-out and the page receives the picture from the presentation thread
  * (psx_web_publish_frame → swt_publish). Browser build only.
+ *
+ * GPU mode (PSX_WEB_GL=1, the page has WebGL 2): there is no presentation
+ * thread. The page's main thread drains the ring once per display refresh
+ * (swt_gl_pump) into the OpenGL renderer built for WebGL 2 (gpu_gl_web.c),
+ * which draws at the requested scale on the graphics card and presents
+ * straight onto a canvas. The emulation thread never waits for it: when the
+ * ring is full (page hidden, no refresh) records are dropped, and once the
+ * page has caught up the whole VRAM and drawing state are sent again.
  */
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
+#include <emscripten/emscripten.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -76,6 +85,15 @@ int swhr_prim_in_backdrop(void) { return 1; }   /* g_swhr_bd_on carries it */
 extern int psx_ws_prim_in_backdrop(void);
 extern int g_ws_bd_stretch_on, g_ws_bd_stretch_pct;
 
+/* GPU replay (gpu_gl_renderer.c, browser build). */
+const GpuRenderBackend *glweb_backend_get(void);
+int  gl_web_init(const char *canvas, uint16_t *vram, int scale);
+int  gl_web_present(int kind, int dx, int dy, int dw, int dh,
+                    int cw, int ch, int vx, int vy, int vw, int vh, int linear);
+int  gl_web_present_pixels(const uint32_t *px, int w, int h,
+                           int cw, int ch, int vx, int vy, int vw, int vh, int linear);
+void gl_web_set_prim_gate(int in_backdrop, int tagged);
+
 /* Page side (web_present.c). */
 uint32_t *psx_web_back_buffer(size_t *cap_pixels);
 void psx_web_commit_frame(int w, int h, int logical_w, int dst_w, int dst_h,
@@ -107,10 +125,23 @@ static int              s_started;
 static uint32_t rec_reserve_pos;
 static uint32_t rec_reserve_size;
 
-static void wait_space(uint32_t need) {
+static int s_gl_mode;               /* GPU replay on the page's main thread */
+static _Atomic int s_dropping;      /* GPU mode: ring overflowed, records dropped */
+static _Atomic int s_resync_ready;  /* GPU mode: the page drained the ring since */
+
+/* 1 when `need` bytes are free. GPU mode never waits: a full ring starts
+ * dropping records until the page catches up (then everything is resent). */
+static int wait_space(uint32_t need) {
+    if (s_gl_mode) {
+        uint32_t used = atomic_load(&s_head) - atomic_load(&s_tail);
+        if (RING_BYTES - used >= need) return 1;
+        atomic_store(&s_resync_ready, 0);
+        atomic_store(&s_dropping, 1);
+        return 0;
+    }
     for (;;) {
         uint32_t used = atomic_load(&s_head) - atomic_load(&s_tail);
-        if (RING_BYTES - used >= need) return;
+        if (RING_BYTES - used >= need) return 1;
         pthread_mutex_lock(&s_mu);
         atomic_store(&s_prod_sleep, 1);
         used = atomic_load(&s_head) - atomic_load(&s_tail);
@@ -120,15 +151,24 @@ static void wait_space(uint32_t need) {
     }
 }
 
+static void resync(void);
+
 /* Reserves a record with `payload` bytes after the header; returns the
- * payload pointer. Must be followed by rec_commit(). */
+ * payload pointer, to be followed by rec_commit(), or NULL when the record is
+ * dropped (GPU mode, ring full). */
 static void *rec_begin(uint32_t op, uint32_t payload) {
     uint32_t size = (uint32_t)((sizeof(RecHdr) + payload + 7u) & ~7u);
+    if (s_gl_mode && atomic_load(&s_dropping)) {
+        if (!atomic_load(&s_resync_ready)) return NULL;
+        atomic_store(&s_dropping, 0);
+        resync();
+        if (atomic_load(&s_dropping)) return NULL;
+    }
     uint32_t head = atomic_load_explicit(&s_head, memory_order_relaxed);
     uint32_t pos = head % RING_BYTES;
     uint32_t contig = RING_BYTES - pos;
     if (contig < size) {                     /* pad to the start of the ring */
-        wait_space(contig);
+        if (!wait_space(contig)) return NULL;
         RecHdr *w = (RecHdr *)(s_ring + pos);
         w->op = OP_WRAP; w->bytes = contig;
         head += contig;
@@ -138,7 +178,7 @@ static void *rec_begin(uint32_t op, uint32_t payload) {
         }
         pos = 0;
     }
-    wait_space(size);
+    if (!wait_space(size)) return NULL;
     RecHdr *h = (RecHdr *)(s_ring + pos);
     h->op = op; h->bytes = size;
     rec_reserve_pos = head;
@@ -153,9 +193,21 @@ static void rec_commit(void) {
     }
 }
 
-static void rec_args(uint32_t op, int n, const int32_t *a) {
+static int rec_args(uint32_t op, int n, const int32_t *a) {
     int32_t *p = (int32_t *)rec_begin(op, (uint32_t)n * 4u);
+    if (!p) return 0;
     memcpy(p, a, (size_t)n * 4u);
+    rec_commit();
+    return 1;
+}
+/* A present read-out: counted as a queued frame before the consumer can see
+ * it, and only if it is recorded at all. */
+static _Atomic uint32_t s_frames_queued;   /* defined with the presentation side below */
+static void rec_frame(uint32_t op, int n, const int32_t *a) {
+    int32_t *p = (int32_t *)rec_begin(op, (uint32_t)n * 4u);
+    if (!p) return;
+    memcpy(p, a, (size_t)n * 4u);
+    atomic_fetch_add(&s_frames_queued, 1u);
     rec_commit();
 }
 #define REC(op, ...) do { const int32_t a_[] = { __VA_ARGS__ }; \
@@ -288,6 +340,172 @@ static void *present_thread(void *arg) {
     return NULL;
 }
 
+/* ---- GPU mode: replay on the page's main thread ------------------------- */
+static const GpuRenderBackend *G;
+static int g_inited, g_init_failed;
+static int g_kind = -1, g_args[4];          /* last read-out queued (kind 0 hires, 1 wide) */
+static int g_have_frame;                    /* something presented since start */
+static int g_last_pub[7];                   /* last OP_PUBLISH geometry */
+static int g_last_was_pixels;
+static int g_cw, g_ch;
+
+/* The game's frame occupies logical_w x dst_h (the session's shape); its
+ * picture is dst_w wide inside it and content_h/240 tall, centred, letterboxed
+ * into the canvas (same layout as the page's software display). */
+static void layout(const int *pub, int cw, int ch, int *vx, int *vy, int *vw, int *vh) {
+    const double logical_w = pub[2] > 0 ? pub[2] : 1, dst_w = pub[3] > 0 ? pub[3] : 1;
+    const double dst_h = pub[4] > 0 ? pub[4] : 1, content_h = pub[5] > 0 ? pub[5] : 240;
+    const double aspect = logical_w / dst_h;
+    double fw = cw, fh = cw / aspect;
+    if (fh > ch) { fh = ch; fw = ch * aspect; }
+    const double pw = fw * (dst_w / logical_w), ph = fh * (content_h / 240.0);
+    *vw = (int)(pw + 0.5); *vh = (int)(ph + 0.5);
+    *vx = (int)((cw - pw) / 2 + 0.5); *vy = (int)((ch - ph) / 2 + 0.5);
+}
+
+static int gl_present_last(void) {
+    if (g_kind < 0 || g_last_was_pixels) return 0;
+    int vx, vy, vw, vh;
+    layout(g_last_pub, g_cw, g_ch, &vx, &vy, &vw, &vh);
+    return gl_web_present(g_kind, g_args[0], g_args[1], g_args[2], g_args[3],
+                          g_cw, g_ch, vx, vy, vw, vh, !g_last_pub[6]);
+}
+
+static void run_record_gl(const RecHdr *h, int *presented) {
+    const int32_t *a = (const int32_t *)(h + 1);
+    switch (h->op) {
+    case OP_SCALE:   G->set_scale(a[0]); break;
+    case OP_FILTER:  G->set_texture_filter(a[0]); break;
+    case OP_SEMI:    G->set_semi_transparency(a[0], a[1]); break;
+    case OP_MASK:    G->set_mask_bits(a[0], a[1]); break;
+    case OP_TW:      G->set_texture_window((uint32_t)a[0]); break;
+    case OP_MOD:     G->set_color_modulation(a[0], a[1], a[2], a[3]); break;
+    case OP_PRECISE: G->set_precise_triangle(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+    case OP_PERSP: {
+        float q[3]; memcpy(q, a + 1, sizeof q);
+        G->set_perspective_triangle(a[0], q[0], q[1], q[2]);
+        break;
+    }
+    case OP_FILL:    G->fill_rect(a[0], a[1], a[2], a[3], (uint16_t)a[4]); break;
+    case OP_COPY:    G->copy_rect(a[0], a[1], a[2], a[3], a[4], a[5]); break;
+    case OP_FLAT_TRI:
+        G->draw_flat_triangle(a[0], a[1], a[2], a[3], a[4], a[5], (uint16_t)a[6]); break;
+    case OP_GOUR_TRI:
+        G->draw_gouraud_triangle(a[0], a[1], (uint16_t)a[2], a[3], a[4], (uint16_t)a[5],
+                                 a[6], a[7], (uint16_t)a[8]); break;
+    case OP_TEX_TRI:
+        G->draw_textured_triangle(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                                  a[8], a[9], a[10], a[11],
+                                  (uint16_t)a[12], (uint16_t)a[13], (uint16_t)a[14]); break;
+    case OP_STEX_TRI:
+        G->draw_shaded_textured_triangle(a[0], a[1], a[2], a[3], (uint32_t)a[4],
+                                         a[5], a[6], a[7], a[8], (uint32_t)a[9],
+                                         a[10], a[11], a[12], a[13], (uint32_t)a[14],
+                                         (uint16_t)a[15], (uint16_t)a[16], (uint16_t)a[17],
+                                         a[18]); break;
+    case OP_FLAT_RECT: G->draw_flat_rect(a[0], a[1], a[2], a[3], (uint16_t)a[4]); break;
+    case OP_TEX_RECT:
+        G->draw_textured_rect(a[0], a[1], a[2], a[3], a[4], a[5],
+                              (uint16_t)a[6], (uint16_t)a[7], (uint16_t)a[8]); break;
+    case OP_TEX_RECT_SCALED:
+        G->draw_textured_rect_scaled(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                                     (uint16_t)a[8], (uint16_t)a[9], (uint16_t)a[10]); break;
+    case OP_LINE:  G->draw_line(a[0], a[1], a[2], a[3], (uint16_t)a[4]); break;
+    case OP_SLINE: G->draw_shaded_line(a[0], a[1], (uint16_t)a[2], a[3], a[4], (uint16_t)a[5]); break;
+    case OP_PIXEL: G->vram_write(a[0], a[1], (uint16_t)a[2]); break;
+    case OP_XFER_IN:
+        G->vram_transfer_in(a[0], a[1], a[2], a[3], (const uint16_t *)(a + 4)); break;
+    case OP_AREA:   G->set_draw_area(a[0], a[1], a[2], a[3]); break;
+    case OP_OFFSET: G->set_draw_offset(a[0], a[1]); break;
+    case OP_WIDE_CONF:   G->wide_configure(a[0], a[1]); break;
+    case OP_WIDE_TARGET: G->wide_set_target(a[0]); break;
+    case OP_WIDE_OFF:    G->wide_disable_target(); break;
+    case OP_WIDE_CLEAR:  G->wide_clear(a[0], a[1], a[2], (uint16_t)a[3]); break;
+    case OP_WIDE_MARGINS: G->wide_clear_margins(a[0], a[1], a[2], (uint16_t)a[3], a[4]); break;
+    case OP_BD: gl_web_set_prim_gate(a[0], 0); break;
+    case OP_READ_HIRES:   /* pitch, dx, dy, dw, dh, scale */
+        g_kind = 0; g_args[0] = a[1]; g_args[1] = a[2]; g_args[2] = a[3]; g_args[3] = a[4];
+        break;
+    case OP_READ_WIDE:    /* pitch, base, dy, dh, scale */
+        g_kind = 1; g_args[0] = a[1]; g_args[1] = a[2]; g_args[2] = 0; g_args[3] = a[3];
+        break;
+    case OP_PUBLISH:
+        memcpy(g_last_pub, a, sizeof g_last_pub);
+        g_last_was_pixels = 0;
+        if (gl_present_last()) { (*presented)++; g_have_frame = 1; }
+        break;
+    case OP_PUBLISH_PIXELS: {
+        int vx, vy, vw, vh;
+        memcpy(g_last_pub, a, sizeof g_last_pub);
+        g_last_was_pixels = 1;
+        layout(a, g_cw, g_ch, &vx, &vy, &vw, &vh);
+        if (gl_web_present_pixels((const uint32_t *)(a + 7), a[0], a[1],
+                                  g_cw, g_ch, vx, vy, vw, vh, !a[6])) {
+            (*presented)++; g_have_frame = 1;
+        }
+        break;
+    }
+    default: break;
+    }
+}
+
+/* Page main thread, once per display refresh: replays everything the
+ * emulation thread recorded and draws the newest picture onto the canvas
+ * (canvas_w x canvas_h, its current drawing-buffer size). Returns the number
+ * of pictures drawn, or -1 if WebGL 2 could not be set up (the page then goes
+ * back to the software picture: reload with PSX_WEB_GL unset). */
+EMSCRIPTEN_KEEPALIVE int swt_gl_pump(int canvas_w, int canvas_h, int scale) {
+    if (!s_gl_mode || !s_started) return 0;
+    if (!g_inited) {
+        if (g_init_failed) return -1;
+        G = glweb_backend_get();
+        if (!gl_web_init("#canvas", s_hr_vram, scale)) { g_init_failed = 1; return -1; }
+        g_inited = 1;
+    }
+    const int resized = canvas_w != g_cw || canvas_h != g_ch;
+    g_cw = canvas_w; g_ch = canvas_h;
+    int presented = 0;
+    /* Far behind (a graphics card slower than the game): skip everything
+     * queued and have the emulation thread send the whole VRAM and drawing
+     * state again, rather than draw stale frames. */
+    {
+        const uint32_t queued = atomic_load(&s_frames_queued);
+        if (queued - s_frames_done > 8u) {
+            atomic_store(&s_tail, atomic_load(&s_head));
+            s_frames_done = queued;
+            atomic_store(&s_resync_ready, 1);
+            atomic_store(&s_dropping, 1);
+            return 0;
+        }
+    }
+    /* Keep the page responsive: once a picture is out and this refresh has
+     * used its budget, the rest waits for the next one. A graphics card that
+     * cannot keep up lets the ring fill, and the game goes on regardless
+     * (records dropped, then everything resent). */
+    const double t0 = emscripten_get_now();
+    for (;;) {
+        uint32_t tail = atomic_load(&s_tail);
+        uint32_t head = atomic_load(&s_head);
+        if (tail == head) {
+            if (atomic_load(&s_dropping)) atomic_store(&s_resync_ready, 1);
+            break;
+        }
+        const RecHdr *h = (const RecHdr *)(s_ring + tail % RING_BYTES);
+        const uint32_t op = h->op;
+        if (op != OP_WRAP) run_record_gl(h, &presented);
+        atomic_store(&s_tail, tail + h->bytes);
+        if (op == OP_READ_HIRES || op == OP_READ_WIDE) s_frames_done++;
+        if ((op == OP_PUBLISH || op == OP_PUBLISH_PIXELS) && presented) {
+            /* 10 ms per refresh; up to 30 ms while several frames are behind. */
+            const double dt = emscripten_get_now() - t0;
+            const uint32_t behind = atomic_load(&s_frames_queued) - s_frames_done;
+            if (dt > 30.0 || (dt > 10.0 && behind < 3u)) break;
+        }
+    }
+    if (!presented && resized && g_have_frame && gl_present_last()) presented = 1;
+    return presented;
+}
+
 /* Waits until the presentation thread has run every queued record. */
 static void drain(void) {
     while (atomic_load(&s_tail) != atomic_load(&s_head)) {
@@ -305,6 +523,10 @@ static int s_wide_w = 0, s_wide_target = 0;
 static int s_wide_bases[4], s_wide_nbases = 0;
 static int s_bd_sent_on = 0, s_bd_sent_pct = 0;
 static int s_pending_read = 0;
+/* Current drawing state, resent with the whole VRAM after a GPU-mode drop. */
+static int s_sh_semi[2], s_sh_mask[2], s_sh_tw, s_sh_mod[4] = { 128, 128, 128, 0 };
+static int s_sh_area[4] = { 0, 0, 1023, 511 }, s_sh_off[2];
+static int s_sh_wide[2], s_sh_target = -1;
 
 static void note_base(int base) {
     for (int i = 0; i < s_wide_nbases; i++) if (s_wide_bases[i] == base) return;
@@ -323,15 +545,41 @@ static void bd_sync(void) {
     }
 }
 
+static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d);
+
+static void resync(void) {
+    REC(OP_SCALE, s_scale);
+    REC(OP_FILTER, s_filter);
+    REC(OP_SEMI, s_sh_semi[0], s_sh_semi[1]);
+    REC(OP_TW, s_sh_tw);
+    REC(OP_MOD, s_sh_mod[0], s_sh_mod[1], s_sh_mod[2], s_sh_mod[3]);
+    REC(OP_AREA, s_sh_area[0], s_sh_area[1], s_sh_area[2], s_sh_area[3]);
+    REC(OP_OFFSET, s_sh_off[0], s_sh_off[1]);
+    REC(OP_MASK, 0, 0);
+    REC(OP_WIDE_OFF, 0);
+    t_xfer_in(0, 0, 1024, 512, s_vram);       /* authoritative VRAM, whole */
+    REC(OP_MASK, s_sh_mask[0], s_sh_mask[1]);
+    REC(OP_WIDE_CONF, s_sh_wide[0], s_sh_wide[1]);
+    if (s_sh_target >= 0) REC(OP_WIDE_TARGET, s_sh_target);
+    s_bd_sent_on = 0; s_bd_sent_pct = 0;
+    REC(OP_BD, 0, 0);
+}
+
 static void t_init(uint16_t *vram) {
     s_vram = vram;
     sw_renderer_init(vram);
     if (!s_started) {
+        const char *gl = getenv("PSX_WEB_GL");
+        s_gl_mode = gl && gl[0] == '1';
         s_ring = (uint8_t *)malloc(RING_BYTES);
         s_hr_vram = (uint16_t *)calloc(1024u * 512u, sizeof(uint16_t));
-        memcpy(s_hr_vram, vram, 1024u * 512u * 2u);
-        swhr_renderer_init(s_hr_vram);
-        s_started = s_ring && s_hr_vram && pthread_create(&s_thread, NULL, present_thread, NULL) == 0;
+        if (s_hr_vram) memcpy(s_hr_vram, vram, 1024u * 512u * 2u);
+        if (s_gl_mode) {
+            s_started = s_ring && s_hr_vram;     /* the page pumps (swt_gl_pump) */
+        } else {
+            swhr_renderer_init(s_hr_vram);
+            s_started = s_ring && s_hr_vram && pthread_create(&s_thread, NULL, present_thread, NULL) == 0;
+        }
     }
 }
 static void t_set_scale(int scale) {
@@ -343,10 +591,16 @@ static void t_set_scale(int scale) {
 static int  t_scale(void) { return s_scale; }
 static void t_set_filter(int b) { s_filter = b; sw_set_texture_filter(b); REC(OP_FILTER, b); }
 static int  t_filter(void) { return s_filter; }
-static void t_semi(int e, int m) { sw_set_semi_transparency(e, m); REC(OP_SEMI, e, m); }
-static void t_mask(int s, int c) { sw_set_mask_bits(s, c); REC(OP_MASK, s, c); }
-static void t_tw(uint32_t raw) { sw_set_texture_window(raw); REC(OP_TW, (int32_t)raw); }
-static void t_mod(int r, int g, int b, int raw) { sw_set_color_modulation(r, g, b, raw); REC(OP_MOD, r, g, b, raw); }
+static void t_semi(int e, int m) {
+    sw_set_semi_transparency(e, m); s_sh_semi[0] = e; s_sh_semi[1] = m; REC(OP_SEMI, e, m);
+}
+static void t_mask(int s, int c) { sw_set_mask_bits(s, c); s_sh_mask[0] = s; s_sh_mask[1] = c; REC(OP_MASK, s, c); }
+static void t_tw(uint32_t raw) { sw_set_texture_window(raw); s_sh_tw = (int)raw; REC(OP_TW, (int32_t)raw); }
+static void t_mod(int r, int g, int b, int raw) {
+    sw_set_color_modulation(r, g, b, raw);
+    s_sh_mod[0] = r; s_sh_mod[1] = g; s_sh_mod[2] = b; s_sh_mod[3] = raw;
+    REC(OP_MOD, r, g, b, raw);
+}
 static void t_precise(int e, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
     sw_set_precise_triangle(e, x0, y0, x1, y1, x2, y2);
     REC(OP_PRECISE, e, x0, y0, x1, y1, x2, y2);
@@ -408,26 +662,34 @@ static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d) {
     if (w <= 0 || h <= 0) return;
     const uint32_t px = (uint32_t)w * (uint32_t)h;
     int32_t *p = (int32_t *)rec_begin(OP_XFER_IN, 16u + px * 2u);
+    if (!p) return;
     p[0] = x; p[1] = y; p[2] = w; p[3] = h;
     memcpy(p + 4, d, px * 2u);
     rec_commit();
 }
 static void t_xfer_out(int x, int y, int w, int h, uint16_t *d) { sw_vram_transfer_out(x, y, w, h, d); }
-static void t_area(int x1, int y1, int x2, int y2) { sw_set_draw_area(x1, y1, x2, y2); REC(OP_AREA, x1, y1, x2, y2); }
+static void t_area(int x1, int y1, int x2, int y2) {
+    sw_set_draw_area(x1, y1, x2, y2);
+    s_sh_area[0] = x1; s_sh_area[1] = y1; s_sh_area[2] = x2; s_sh_area[3] = y2;
+    REC(OP_AREA, x1, y1, x2, y2);
+}
 static void t_get_area(int *x1, int *y1, int *x2, int *y2) { sw_get_draw_area(x1, y1, x2, y2); }
-static void t_offset(int x, int y) { sw_set_draw_offset(x, y); REC(OP_OFFSET, x, y); }
+static void t_offset(int x, int y) { sw_set_draw_offset(x, y); s_sh_off[0] = x; s_sh_off[1] = y; REC(OP_OFFSET, x, y); }
 
 static void t_wide_conf(int w, int off) {
     if (w <= 0 || w != s_wide_w) s_wide_nbases = 0;
     s_wide_w = w > 0 ? w : 0;
     if (!s_wide_w) s_wide_target = 0;
+    s_sh_wide[0] = w; s_sh_wide[1] = off;
+    if (!s_wide_w) s_sh_target = -1;
     REC(OP_WIDE_CONF, w, off);
 }
 static void t_wide_target(int base) {
     if (s_wide_w) { note_base(base); s_wide_target = 1; }
+    s_sh_target = base;
     REC(OP_WIDE_TARGET, base);
 }
-static void t_wide_off(void) { s_wide_target = 0; REC(OP_WIDE_OFF, 0); }
+static void t_wide_off(void) { s_wide_target = 0; s_sh_target = -1; REC(OP_WIDE_OFF, 0); }
 static void t_wide_clear(int base, int y, int h, uint16_t c) {
     if (s_wide_w) note_base(base);
     REC(OP_WIDE_CLEAR, base, y, h, c);
@@ -444,8 +706,10 @@ static int t_render_display(uint32_t *o, int p, int dx, int dy, int dw, int dh) 
 }
 static int t_render_hires(uint32_t *o, int p, int dx, int dy, int dw, int dh) {
     (void)o;
-    atomic_fetch_add(&s_frames_queued, 1u);
-    REC(OP_READ_HIRES, p, dx, dy, dw, dh, s_scale);
+    {   /* counted only when recorded (GPU mode may drop it) */
+        const int32_t a[] = { p, dx, dy, dw, dh, s_scale };
+        rec_frame(OP_READ_HIRES, 6, a);
+    }
     s_pending_read = 1;
     return dw * dh * s_scale * s_scale;
 }
@@ -455,12 +719,15 @@ static int t_render_wide(uint32_t *o, int p, int base, int dy, int dh) {
     int known = 0;
     for (int i = 0; i < s_wide_nbases; i++) if (s_wide_bases[i] == base) known = 1;
     if (!known) return 0;
-    atomic_fetch_add(&s_frames_queued, 1u);
-    REC(OP_READ_WIDE, p, base, dy, dh, s_scale);
+    {
+        const int32_t a[] = { p, base, dy, dh, s_scale };
+        rec_frame(OP_READ_WIDE, 5, a);
+    }
     s_pending_read = 1;
     return s_wide_w * s_scale * dh * s_scale;
 }
 static int t_wide_dump(uint32_t *o, int cap, int *ow, int *oh, int base) {
+    if (s_gl_mode) { *ow = 0; *oh = 0; return 0; }
     drain();
     return swhr_wide_dump_full(o, cap, ow, oh, base);
 }
@@ -477,6 +744,7 @@ int swt_publish(const uint32_t *px, int w, int h, int logical_w, int dst_w,
     }
     const uint32_t n = (uint32_t)w * (uint32_t)h;
     int32_t *p = (int32_t *)rec_begin(OP_PUBLISH_PIXELS, 28u + n * 4u);
+    if (!p) return 1;
     p[0] = w; p[1] = h; p[2] = logical_w; p[3] = dst_w; p[4] = dst_h; p[5] = content_h; p[6] = nearest;
     memcpy(p + 7, px, (size_t)n * 4u);
     rec_commit();
