@@ -10,6 +10,7 @@
 
 #if defined(PSX_WEB)
 #include <emscripten/emscripten.h>
+#include <emscripten/threading.h>
 #include <unordered_map>
 #include <list>
 /* Streamed disc: chunks of a remote BIN fetched on demand with a synchronous
@@ -33,13 +34,25 @@ const std::vector<uint8_t>* remote_chunk(const std::string& url, uint64_t index,
     const uint64_t off = index * kRemoteChunk;
     const uint64_t len = std::min<uint64_t>(kRemoteChunk, size - off);
     std::vector<uint8_t> data(len);
+    /* The disc comes over the network (often a tunnel): a chunk that does not
+     * arrive is asked for again, with a growing pause, for about two minutes
+     * before the read fails. The game waits meanwhile (a disc read stalls on
+     * real hardware too); giving up after a few quick tries crashed it on a
+     * short network hiccup. */
     int ok = 0;
-    for (int attempt = 0; attempt < 5 && !ok; attempt++) {
+    double waited_ms = 0.0;
+    for (int attempt = 0; !ok && waited_ms < 120000.0; attempt++) {
+        if (attempt > 0) {
+            const double pause = std::min(200.0 * (double)(1 << std::min(attempt - 1, 3)), 1000.0);
+            emscripten_thread_sleep(pause);
+            waited_ms += pause;
+        }
         ok = EM_ASM_INT({
             try {
                 var x = new XMLHttpRequest();
                 x.open('GET', UTF8ToString($0), false);
                 x.responseType = 'arraybuffer';
+                x.timeout = 20000;   /* a stalled link is retried, not waited on forever */
                 x.send();
                 if (x.status !== 200 || !x.response || x.response.byteLength !== $2) return 0;
                 HEAPU8.set(new Uint8Array(x.response), $1);
