@@ -27,21 +27,18 @@ void     psx_lockstep_boundary(void);
 void     psx_lockstep_init_from_env(void);
 uint32_t psx_lockstep_ram_digest(void);
 
-/* Picks the pads the game sees from every participant's word for a frame
- * (WebAssembly lockstep). Must depend only on guest state and its inputs. */
-typedef void (*psx_lockstep_select_fn)(uint32_t frame, const uint16_t *words,
-                                       uint32_t nplayers, uint16_t pads[2]);
-void psx_lockstep_set_select(psx_lockstep_select_fn fn);
-/* The default selection (one shared controller, idle handoff). */
-void psx_lockstep_default_select(uint32_t frame, const uint16_t *words,
-                                 uint32_t nplayers, uint16_t pads[2]);
-/* Status for the page: participant driving the game, turn's team number. */
-void psx_lockstep_set_owner(int participant, uint32_t team);
-
-/* WebAssembly lockstep: participant driving the menus, mask of participants
- * who left (both deterministic, from the frame's control word). */
+/* WebAssembly lockstep, owner-only: at each frame the game reads ONE
+ * participant's pad (turn-based titles: whoever's turn it is; menus: the
+ * host), so a frame waits only for that participant's word, never for the
+ * others. The title plugin names the participant from guest state alone
+ * (every peer makes the same choice); -1 = the host. A participant who left
+ * (or is beyond nplayers) falls back to the host, then to the first one still
+ * there. *team is only shown to the page (0 none, N = battle team N,
+ * 0x100 | N = setting up team N). */
+typedef int (*psx_lockstep_who_fn)(uint32_t frame, uint32_t nplayers, uint32_t *team);
+void psx_lockstep_set_who(psx_lockstep_who_fn fn);
+/* Participant driving the menus (set by the page for the session). */
 uint32_t psx_lockstep_host(void);
-uint32_t psx_lockstep_gone_mask(void);
 
 /* Whole-machine snapshot for a player joining a running game. A peer asks
  * for one at a boundary frame; once written, EVERY peer (the one that saved

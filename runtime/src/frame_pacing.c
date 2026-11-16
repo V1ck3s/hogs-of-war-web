@@ -43,11 +43,19 @@ uint32_t frame_pacing_sleep_ms(uint64_t now, uint64_t deadline,
  * sub-realtime workload into an unbounded catch-up burst. */
 #define FRAME_PACER_CATCHUP_MAX_PERIODS 12u
 
+/* Set by the browser's lockstep (psx_lockstep_web.c) while this peer is behind
+ * the player in control: frames run unthrottled until it has caught up. */
+volatile int g_psx_lockstep_hurry = 0;
+
 void frame_pacer_wait(FramePacer *p, double period_ms) {
     uint64_t freq = SDL_GetPerformanceFrequency();
     uint64_t period = (uint64_t)((double)freq * (period_ms / 1000.0));
     uint64_t now = SDL_GetPerformanceCounter();
 
+    if (g_psx_lockstep_hurry) {
+        p->next_deadline = now + period;   /* no debt: pacing resumes from here */
+        return;
+    }
     if (p->next_deadline == 0 ||
         now >= p->next_deadline + period * FRAME_PACER_CATCHUP_MAX_PERIODS) {
         /* First frame, or sustained slowness beyond the catch-up window:
