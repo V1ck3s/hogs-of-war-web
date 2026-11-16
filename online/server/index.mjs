@@ -183,12 +183,32 @@ function newRoomCode() {
     if (!rooms.has(c)) return c;
   }
 }
-function send(c, obj) { if (c && c.ws.readyState === 1) c.ws.send(JSON.stringify(obj)); }
+// Tests only: CDG_SLOW=<name>:<ms>:<jitter ms> delays everything to and from
+// the player of that name by ms + random(jitter) each way, order kept (a bad
+// connection, tests/badnet.mjs).
+const SLOW = (() => {
+  const v = process.env.CDG_SLOW;
+  if (!v) return null;
+  const [name, base, jitter] = v.split(':');
+  return { name, base: +base || 0, jitter: +jitter || 0 };
+})();
+function later(c, key, fn) {
+  if (!SLOW || !c || c.name !== SLOW.name) { fn(); return; }
+  const now = Date.now();
+  const at = Math.max(c[key] || 0, now + SLOW.base + Math.random() * SLOW.jitter);
+  c[key] = at;
+  setTimeout(fn, at - now);
+}
+function send(c, obj) {
+  if (!c) return;
+  const text = JSON.stringify(obj);
+  later(c, 'outAt', () => { if (c.ws.readyState === 1) c.ws.send(text); });
+}
 // Lockstep traffic (inputs, digests) goes to a player's lane when it has one:
 // a second socket opened by the page's lockstep worker, so that a busy page
 // (drawing, garbage collection, background tab) never delays it.
 function laneOf(c) { return c && c.lane && c.lane.readyState === 1 ? c.lane : c && c.ws.readyState === 1 ? c.ws : null; }
-function sendLane(c, text) { const w = laneOf(c); if (w) w.send(text); }
+function sendLane(c, text) { later(c, 'outAt', () => { const w = laneOf(c); if (w) w.send(text); }); }
 
 function roomView(r) {
   return {
@@ -293,7 +313,7 @@ function onJson(c, m) {
     case 'create': {
       if (r) leaveRoom(c);
       const code = newRoomCode();
-      const nr = { code, host: c.id, members: [c.id], seats: new Map([[c.id, 0]]), state: 'lobby', delay: 5, session: null, mode: 'multi', cpus: 1 };
+      const nr = { code, host: c.id, members: [c.id], seats: new Map([[c.id, 0]]), state: 'lobby', delay: 2, session: null, mode: 'multi', cpus: 1 };
       rooms.set(code, nr);
       c.room = code;
       log(`salon ${code} créé par ${c.name}`);
@@ -447,13 +467,14 @@ export function start({ port = PORT, host = HOST } = {}) {
     clients.set(c.id, c);
     let owner = null;   // set when this socket is another client's lane
     ws.on('pong', () => { c.alive = true; });
-    ws.on('message', (data, bin) => {
+    ws.on('message', (data, bin) => later(owner || c, 'inAt', () => onMessage(data, bin)));
+    const onMessage = (data, bin) => {
       let m;
       if (owner) {
         // A lane carries only that player's lockstep inputs and digests.
         if (bin) return;
         try { m = JSON.parse(data); } catch { return; }
-        if (m && m.t === 'ping') { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'pong', ts: m.ts })); return; }
+        if (m && m.t === 'ping') { const t = JSON.stringify({ t: 'pong', ts: m.ts }); later(owner, 'outAt', () => { if (ws.readyState === 1) ws.send(t); }); return; }
         if (m && (m.t === 'in' || m.t === 'hash' || m.t === 'diag') && clients.get(owner.id) === owner) onJson(owner, m);
         return;
       }
@@ -468,7 +489,7 @@ export function start({ port = PORT, host = HOST } = {}) {
         return;
       }
       if (m && typeof m.t === 'string') onJson(c, m);
-    });
+    };
     ws.on('close', () => {
       if (owner) { if (owner.lane === ws) owner.lane = null; return; }
       leaveRoom(c); clients.delete(c.id);

@@ -12,6 +12,7 @@ const hashes = new Map();   // frame -> my digest
 const pendingHashes = new Map(); // peers' digests for frames I have not reached
 let timer = 0;
 let lead = 0;
+const inbox = [];   // recent remote 'in' messages (see 'resync')
 
 // Lane: this worker's own socket to the server for lockstep traffic, so that
 // inputs and digests never wait for the page's main thread. Until it is open
@@ -59,12 +60,12 @@ function tick() {
   const cur = Math.max(Atomics.load(mem.u32, status), ls.start);
   const batch = ls.local(cur, word);
   if (batch) sendNet({ t: 'in', f: batch.f, w: batch.w });
-  ls.pump(cur + mem.ring - 8, (f, words) => {
-    const slot = f % mem.ring;
-    const base = (mem.words >> 1) + slot * mem.stride;
-    for (let p = 0; p < mem.maxp; p++) mem.u16[base + p] = p < words.length ? words[p] : NEUTRAL;
-    mem.u16[base + mem.maxp] = ls.control(f);
-    const tag = (mem.tags >> 2) + slot;
+  // Each participant's words go to the game as soon as they are known; the
+  // game waits only for the one in control (psx_lockstep_web.c).
+  ls.pump(cur + mem.ring - 8, (p, f, w) => {
+    const idx = (f % mem.ring) * mem.stride + p;
+    mem.u16[(mem.words >> 1) + idx] = w;
+    const tag = (mem.tags >> 2) + idx;
     Atomics.store(mem.u32, tag, f + 1);
     Atomics.notify(mem.i32, tag);
   });
@@ -85,9 +86,21 @@ function tick() {
 
 function clearTags() {
   views();
-  const t0 = mem.tags >> 2;
-  for (let i = 0; i < mem.ring; i++) Atomics.store(mem.u32, t0 + i, 0);
-  for (let i = 0; i < mem.ring; i++) Atomics.notify(mem.i32, t0 + i);
+  const t0 = mem.tags >> 2, n = mem.ring * mem.stride;
+  for (let i = 0; i < n; i++) Atomics.store(mem.u32, t0 + i, 0);
+  for (let i = 0; i < n; i++) Atomics.notify(mem.i32, t0 + i);
+}
+
+// Last frame of each participant who left (0xFFFFFFFF: still there), read by
+// the game to fall back to the host for their turns.
+function setGone(index, after) {
+  views();
+  if (index < 0 || index >= mem.maxp) return;
+  Atomics.store(mem.u32, (mem.gone >> 2) + index, after < 0 ? 0 : after >>> 0);
+}
+function resetGone() {
+  views();
+  for (let i = 0; i < mem.maxp; i++) Atomics.store(mem.u32, (mem.gone >> 2) + i, 0xFFFFFFFF);
 }
 
 // Watchdog: the game not taking a new frame for 5 s, or the page's own
@@ -100,7 +113,7 @@ function sendDiag(kind, extra) {
   const d = {
     frame: Atomics.load(mem.u32, status), waitMs: Atomics.load(mem.u32, status + 3),
     published: ls ? ls.nextPublish : -1, sentUpTo: ls ? ls.nextLocal : -1, lead: ls ? ls.lead : 0,
-    waiting: ls ? ls.waitingOn() : [], lane: laneOpen, pageBeatAgoMs: pageBeat ? Math.round(performance.now() - pageBeat) : -1,
+    waiting: ls ? waitingFor() : [], lane: laneOpen, pageBeatAgoMs: pageBeat ? Math.round(performance.now() - pageBeat) : -1,
     page: pageInfo, ...extra,
   };
   const msg = { t: 'diag', kind, d };
@@ -124,6 +137,12 @@ function watchdog(now) {
   }
 }
 
+// Participant the game is waiting for right now (none: it is running).
+function waitingFor() {
+  const w = Atomics.load(mem.u32, (mem.status >> 2) + 7);
+  return w ? [w - 1] : [];
+}
+
 let statsAt = 0;
 function loop() {
   tick();
@@ -134,7 +153,7 @@ function loop() {
     const status = mem.status >> 2;
     postMessage({
       t: 'stats', frame: Atomics.load(mem.u32, status), waitMs: Atomics.load(mem.u32, status + 3),
-      holder: Atomics.load(mem.u32, status + 4) - 1, team: Atomics.load(mem.u32, status + 5), waiting: ls.waitingOn(),
+      holder: Atomics.load(mem.u32, status + 4) - 1, team: Atomics.load(mem.u32, status + 5), waiting: waitingFor(),
       lead: ls.lead,
     });
   }
@@ -147,8 +166,9 @@ function handle(m) {
     case 'start':
       if (m.session !== undefined) session = m.session;
       if (m.lane && !laneInfo) { laneInfo = m.lane; openLane(); }
-      mem = { memory: m.memory, tags: m.tags, words: m.words, status: m.status, ring: m.ring, maxp: m.maxp, stride: m.stride };
+      mem = { memory: m.memory, tags: m.tags, words: m.words, status: m.status, ring: m.ring, maxp: m.maxp, stride: m.stride, gone: m.gone };
       ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start || 0, host: m.host || 0 });
+      resetGone();
       if (lead) ls.setLead(lead);
       if (m.start) clearTags();
       clearInterval(timer);
@@ -160,7 +180,12 @@ function handle(m) {
       // ring is emptied first so that the game never takes a stale frame of
       // the previous schedule (peers ahead of the snapshot rewind to it).
       ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start, host: m.host });
-      for (const [i, after] of m.dropped || []) ls.drop(i, after);
+      resetGone();
+      for (const [i, after] of m.dropped || []) { ls.drop(i, after); setGone(i, after); }
+      // Words that arrived before this resync (a joining player starts sending
+      // as soon as it has loaded the snapshot, which may be before this peer
+      // hears of it): fed again in arrival order, so the latest word wins.
+      for (const q of inbox) ls.receive(ls.players.indexOf(q.p), q.f, q.w);
       if (lead) ls.setLead(lead);
       clearTags();
       hashes.clear(); pendingHashes.clear();
@@ -185,10 +210,12 @@ function handle(m) {
       if (ls) tick();
       break;
     case 'in':
+      inbox.push(m);
+      if (inbox.length > 4096) inbox.shift();
       if (ls) { ls.receive(ls.players.indexOf(m.p), m.f, m.w); tick(); }
       break;
     case 'drop':
-      if (ls) { ls.drop(ls.players.indexOf(m.id), m.after); tick(); }
+      if (ls) { const i = ls.players.indexOf(m.id); ls.drop(i, m.after); setGone(i, m.after); tick(); }
       break;
     case 'hash': {
       const mine = hashes.get(m.f);

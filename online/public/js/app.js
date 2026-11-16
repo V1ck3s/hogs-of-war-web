@@ -117,15 +117,13 @@ function noteRtt(rtt) {
   updateLead();
 }
 
-// Input lead: my words must reach the slowest peer before its game needs
-// them. Path me → server → peer ≈ half my round trip + half theirs; a game
-// frame lasts 20 ms (PAL vblank); two frames of margin for jitter.
+// Input lead: the game waits only for the player in control (owner-only
+// lockstep), so that player never waits for the others and needs no lead for
+// their sake: the session's minimum (a frame or two), whatever the pings.
+// The others watch a little behind and catch up (psx_lockstep_web.c).
 function updateLead() {
-  const mine = Math.max(0, ...(state.rtts || [0]));
-  const other = Math.max(mine, state.roomRtt || 0);
-  const n = Math.ceil((mine + other) / 2 / 20) + 2;
-  state.lead = n;
-  if (state.worker) state.worker.postMessage({ t: 'lead', n });
+  state.lead = 0;
+  if (state.worker) state.worker.postMessage({ t: 'lead', n: 0 });
 }
 
 // ------------------------------------------------------------------ lobby / room
@@ -510,6 +508,7 @@ async function attach(Module, go) {
     tags: Module._psx_web_lockstep_tags(), words: Module._psx_web_lockstep_words(),
     status: Module._psx_web_lockstep_status(), ring: Module._psx_web_lockstep_ring(),
     maxp: Module._psx_web_lockstep_maxp(), stride: Module._psx_web_lockstep_stride(),
+    gone: Module._psx_web_lockstep_gone(),
     players: go.players, me: state.id, delay: go.delay,
     start: go.snapshot ? go.f : 0, host: go.hostIndex | 0,
   });

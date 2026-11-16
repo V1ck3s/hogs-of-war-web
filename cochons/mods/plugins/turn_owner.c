@@ -3,7 +3,8 @@
  *
  * Hogs of War plays every team's turn on controller 1 (hot-seat). Online,
  * every participant owns a team, and controller 1 takes only the input of the
- * participant entitled to act at this moment:
+ * participant entitled to act at this moment (the runtime then waits for that
+ * participant's input only, see psx_lockstep.h):
  *   - battle turn of team N: the participant who owns team N;
  *   - team setup ("PORC FORCE" ... "JOUEUR SUIVANT"): the owner of the team
  *     being set up;
@@ -49,40 +50,26 @@ static uint32_t battle_turn_team(void) {
     return (team >= 1u && team <= 8u) ? team : 0u;
 }
 
-static uint32_t host_of(uint32_t n) {
-    const uint32_t h = psx_lockstep_host();
-    return h < n ? h : 0u;
-}
-
-/* Participant entitled to act for `slot` (team slot, 0-based). */
-static uint32_t slot_owner(uint32_t slot, uint32_t n) {
-    if (slot < n && !(psx_lockstep_gone_mask() & (1u << slot))) return slot;
-    return host_of(n);
-}
-
-static void turn_owner_select(uint32_t frame, const uint16_t *words,
-                              uint32_t nplayers, uint16_t pads[2]) {
-    if (!nplayers) { psx_lockstep_default_select(frame, words, nplayers, pads); return; }
-    const uint32_t team = battle_turn_team();
-    if (team) {
-        const uint32_t owner = slot_owner(team - 1u, nplayers);
-        pads[0] = words[owner];
-        pads[1] = 0xFFFFu;
-        psx_lockstep_set_owner((int)owner, team);
-        return;
+/* Participant whose pad the game reads at this frame (the runtime waits for
+ * that participant's word only, falling back to the host for a team nobody
+ * owns or a participant who left). */
+static int turn_owner_who(uint32_t frame, uint32_t nplayers, uint32_t *team) {
+    (void)frame; (void)nplayers;
+    const uint32_t t = battle_turn_team();
+    if (t) {
+        *team = t;
+        return (int)(t - 1u);
     }
     if (psx_mod_read_word(STATE_HANDLER) == STATE_MENUS &&
         psx_mod_read_word(MENU_PTR) == MENU_SETUP) {
         const uint32_t slot = psx_mod_read_byte(SETUP_TEAM);   /* team setup */
-        const uint32_t owner = slot_owner(slot, nplayers);
-        pads[0] = words[owner];
-        pads[1] = 0xFFFFu;
-        psx_lockstep_set_owner((int)owner, 0x100u | (slot + 1u));
-        return;
+        *team = 0x100u | (slot + 1u);
+        return (int)slot;
     }
-    psx_lockstep_default_select(frame, words, nplayers, pads);
+    *team = 0;
+    return -1;   /* the host */
 }
 
 PSX_MOD_CONSTRUCTOR(cochons_register_turn_owner) {
-    psx_lockstep_set_select(turn_owner_select);
+    psx_lockstep_set_who(turn_owner_who);
 }

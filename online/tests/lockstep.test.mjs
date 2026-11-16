@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Lockstep, NEUTRAL } from '../public/js/lockstep.js';
 
-// Simulates N peers exchanging batches through a perfect relay and checks
-// that every peer publishes exactly the same words for every frame.
+// Owner-only lockstep: each participant's words reach the game on their own.
+// Simulates N peers exchanging batches through a jittery relay; every peer
+// must hand the game exactly the same word for every (participant, frame).
 function run(n, frames, delay, jitter = 0) {
   const ids = Array.from({ length: n }, (_, i) => `p${i}`);
-  const peers = ids.map((id) => ({ id, ls: new Lockstep({ players: ids, me: id, delay }), out: [], cur: 0, queue: [] }));
+  const peers = ids.map((id) => ({ id, ls: new Lockstep({ players: ids, me: id, delay }), out: ids.map(() => []), cur: 0, queue: [] }));
   let rnd = 7;
   const rand = () => (rnd = (rnd * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
   for (let step = 0; step < frames * 4; step++) {
@@ -17,37 +18,42 @@ function run(n, frames, delay, jitter = 0) {
     }
     for (const p of peers) {
       p.queue = p.queue.filter((m) => { if (m.at <= step) { p.ls.receive(m.i, m.f, m.w); return false; } return true; });
-      p.ls.pump(p.cur + 64, (f, words) => p.out.push([f, ...words].join(',')));
-      if (p.out.length > p.cur + 1) p.cur = p.out.length - 1;   // the game consumed what was published
+      p.ls.pump(p.cur + 64, (i, f, w) => { assert.equal(f, p.out[i].length); p.out[i].push(w); });
+      // The game reads participant (frame mod n): it advances while that word is known.
+      while (p.out[p.cur % n].length > p.cur + 1) p.cur++;
     }
   }
   return peers;
 }
 
-test('every peer publishes the same inputs for every frame', () => {
+test('every peer hands the game the same word for every participant and frame', () => {
   const peers = run(3, 400, 4, 6);
-  const len = Math.min(...peers.map((p) => p.out.length));
-  assert.ok(len > 300, `published ${len}`);
-  for (const p of peers.slice(1)) assert.deepEqual(p.out.slice(0, len), peers[0].out.slice(0, len));
+  for (let i = 0; i < 3; i++) {
+    const len = Math.min(...peers.map((p) => p.out[i].length));
+    assert.ok(len > 300, `participant ${i}: ${len} words`);
+    for (const p of peers.slice(1)) assert.deepEqual(p.out[i].slice(0, len), peers[0].out[i].slice(0, len));
+  }
 });
 
-test('frames below the delay are neutral and need nobody', () => {
-  const ls = new Lockstep({ players: ['a', 'b'], me: 'a', delay: 5 });
-  const got = [];
-  ls.pump(10, (f, w) => got.push([f, w]));
-  assert.equal(got.length, 5);
-  assert.deepEqual(got[4], [4, [NEUTRAL, NEUTRAL]]);
-  assert.deepEqual(ls.waitingOn(), [0, 1]);
-});
-
-test('a dropped participant is neutral after its last relayed frame', () => {
+test('a participant is published without waiting for the others', () => {
   const ls = new Lockstep({ players: ['a', 'b'], me: 'a', delay: 2 });
   ls.local(10, 0x1234);
-  ls.receive(1, 2, [0xaaaa, 0xbbbb]);
+  const got = [[], []];
+  ls.pump(20, (i, f, w) => got[i].push([f, w]));
+  // Mine: neutral below the delay, then my word up to cur + lead; b: only the neutral frames.
+  assert.deepEqual(got[0].slice(0, 3), [[0, NEUTRAL], [1, NEUTRAL], [2, 0x1234]]);
+  assert.equal(got[0].length, 13);
+  assert.deepEqual(got[1], [[0, NEUTRAL], [1, NEUTRAL]]);
+  assert.deepEqual(ls.waitingOn(2), [1]);
+});
+
+test('nothing is published for a dropped participant after its last relayed frame', () => {
+  const ls = new Lockstep({ players: ['a', 'b'], me: 'a', delay: 2 });
+  ls.receive(1, 2, [0xaaaa, 0xbbbb, 0xcccc]);
   ls.drop(1, 3);
   const got = [];
-  ls.pump(10, (f, w) => got.push(w[1]));
-  assert.deepEqual(got.slice(0, 6), [NEUTRAL, NEUTRAL, 0xaaaa, 0xbbbb, NEUTRAL, NEUTRAL]);
+  ls.pump(10, (i, f, w) => { if (i === 1) got.push([f, w]); });
+  assert.deepEqual(got, [[0, NEUTRAL], [1, NEUTRAL], [2, 0xaaaa], [3, 0xbbbb]]);
 });
 
 test('a spectator never sends and follows the players', () => {
@@ -55,6 +61,6 @@ test('a spectator never sends and follows the players', () => {
   assert.equal(ls.local(50, 0), null);
   ls.receive(0, 3, [1, 2, 3]);
   const got = [];
-  ls.pump(100, (f, w) => got.push(w[0]));
+  ls.pump(100, (i, f, w) => got.push(w));
   assert.deepEqual(got, [NEUTRAL, NEUTRAL, NEUTRAL, 1, 2, 3]);
 });
