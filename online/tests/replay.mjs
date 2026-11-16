@@ -68,6 +68,17 @@ for (;;) {
   if (Date.now() - t0 > shot * 30000) { console.log(`      t=${((Date.now() - t0) / 1000) | 0}s image ${f}`); await page.screenshot({ path: path.join(out, `r_${String(shot).padStart(3, '0')}.png`) }); shot++; }
 }
 await page.screenshot({ path: path.join(out, 'fin.png') });
+// Highest byte ever written in the moved packet buffer db1 (0x80200000, 8 MB
+// RAM, zero at boot): the peak size of one frame's GPU packets.
+const hwm = await page.evaluate(() => {
+  const g = window.__cdg.state.game;
+  for (let a = 0x80280000; a >= 0x80200000; a -= 4) if (g._psx_web_peek32(a) !== 0) return a - 0x80200000 + 4;
+  return 0;
+});
+const gl = await page.evaluate(() => { const s = window.__cdg.state, g = s.game; const p = (i) => { try { return g._swt_probe(i) >>> 0; } catch { return -1; } };
+  return { resyncs: p(7), shown: s.display ? s.display.frames : -1, frame: (s.lastStats || {}).frame }; });
+console.log(`image GPU : ${gl.shown} images affichées pour ${gl.frame} images de jeu, ${gl.resyncs} renvois complets de la VRAM (retard de l’affichage)`);
+console.log(`tampon de dessin db1 : au plus ${(hwm / 1024).toFixed(1)} Ko utilisés sur 320 Ko (l’original en avait 160)`);
 console.log(frozen ? `ARRÊT/GEL à l’image ${last}` : `atteint l’image ${last}`);
 if (frozen) {
   const tr = await page.evaluate(() => { try { return new TextDecoder().decode(window.__cdg.state.game.FS.readFile('/game/psx_cps_exit_trace.json')); } catch (e) { return 'pas de trace : ' + e.message; } });
