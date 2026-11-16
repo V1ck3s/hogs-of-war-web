@@ -80,7 +80,11 @@ function sendFile(req, res, file, cache) {
 }
 
 // /disc/<track>/<chunk>: one immutable chunk of a disc track.
+// Tests only: CDG_DISC_FAIL=<0..1> answers that share of disc chunk requests
+// with an error, as a flaky link would (tests/discfail.mjs).
+const DISC_FAIL = +(process.env.CDG_DISC_FAIL || 0);
 function serveDisc(req, res, m) {
+  if (DISC_FAIL > 0 && Math.random() < DISC_FAIL) { res.writeHead(503, ISOLATION).end(); return; }
   const t = disc && disc.tracks[+m[1]];
   const i = +m[2];
   if (!t || !Number.isInteger(i) || i < 0 || i * disc.chunk >= t.size) {
