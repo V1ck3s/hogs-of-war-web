@@ -162,3 +162,5 @@ EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_lockstep_status(void) { return (uintptr_t
 
 /* Guest RAM word, for the page's diagnostics and tests (read-only). */
 EMSCRIPTEN_KEEPALIVE uint32_t psx_web_peek32(uint32_t addr) { return psx_mod_read_word(addr); }
+/* Tests only (single player): store a guest word from the page's thread. */
+EMSCRIPTEN_KEEPALIVE void psx_web_poke32(uint32_t addr, uint32_t value) { psx_mod_write_word(addr, value); }

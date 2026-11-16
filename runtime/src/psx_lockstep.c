@@ -18,8 +18,12 @@ void psx_lockstep_set_provider(psx_lockstep_provider_fn fn) { s_provider = fn; s
 int psx_lockstep_active(void) { return s_provider != NULL; }
 uint32_t psx_lockstep_frame(void) { return s_frame; }
 
+/* The retail 2 MB only: with the 8 MB main RAM the rest holds what games
+ * derive from it (e.g. GPU packets), and hashing 8 MB on the emulation
+ * thread every digest would cost a frame's worth of time in the browser. */
 uint32_t psx_lockstep_ram_digest(void) {
-    return g_psx_ram ? crc32_compute(g_psx_ram, g_psx_ram_size) : 0u;
+    const uint32_t n = g_psx_ram_size < 0x200000u ? g_psx_ram_size : 0x200000u;
+    return g_psx_ram ? crc32_compute(g_psx_ram, n) : 0u;
 }
 
 /* ---- snapshots (late join) ---------------------------------------------- */
