@@ -35,7 +35,7 @@ async function browser(name, q, aspect) {
   await page.setViewport({ width: 1100, height: 620 });
   page.on('console', (m) => { const t = m.text(); if (!/lockstep frame|GL Driver Message/.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.RASTER === "1" ? "&raster=1" : ""}${process.env.MEMO === "0" ? "&memo=0" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.SKIP === "1" ? "&rasterskip=1" : ""}${process.env.MEMO === "0" ? "&memo=0" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
   await page.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
@@ -74,14 +74,19 @@ const bufs = await host.page.evaluate(() => [0x80033AC4, 0x80037B38, 0x80029194]
 console.log(`      tampons de dessin : ${bufs[0]}, ${bufs[1]} (taille ${bufs[2]})`);
 await host.page.screenshot({ path: path.join(out, 'bataille.png') });
 // Walk: hold arrows in turn; cross the turn changes too.
-const keys = ['ArrowUp', 'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowUp'];
+const keys = process.env.ACTIONS
+  // weapon menu, next weapon, take it, aim (L1), fire, jump, walk
+  ? [['Backspace', 700], ['ArrowRight', 300], ['Space', 300], ['KeyQ', 2500], ['Space', 1500],
+     ['ArrowUp', 2500], ['KeyF', 300], ['ArrowLeft', 1500], ['ArrowUp', 2000], ['Backspace', 700],
+     ['ArrowRight', 300], ['ArrowRight', 300], ['Space', 300], ['Space', 2000], ['KeyR', 300]]
+  : ['ArrowUp', 'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowUp'].map((k) => [k, 2500]);
 const t0 = Date.now(); let last = await frameOf(), lastT = Date.now(), n = 0, frozen = false;
 while (Date.now() - t0 < (+(process.env.MINUTES || 6)) * 60000) {
-  const k = keys[n % keys.length];
+  const [k, hold] = keys[n % keys.length];
   await host.page.keyboard.down(k);
   const t1 = Date.now();
-  while (Date.now() - t1 < 2500) {
-    await sleep(500);
+  while (Date.now() - t1 < hold) {
+    await sleep(Math.min(500, hold));
     const f = await frameOf();
     if (f !== last) { last = f; lastT = Date.now(); }
     else if (Date.now() - lastT > 10000) { frozen = true; break; }
@@ -90,7 +95,8 @@ while (Date.now() - t0 < (+(process.env.MINUTES || 6)) * 60000) {
   if (frozen) break;
   if (n % 6 === 0) {
     const x = await info(host.page);
-    console.log(`      t=${((Date.now() - t0) / 1000) | 0}s image ${x.frame} « ${x.turn} »`);
+    const pr = await host.page.evaluate(() => { try { return window.__cdg.state.game._swt_probe(3) >>> 0; } catch { return -1; } });
+    console.log(`      t=${((Date.now() - t0) / 1000) | 0}s image ${x.frame} « ${x.turn} » relectures ${pr}`);
     await host.page.screenshot({ path: path.join(out, `w_${String(n).padStart(3, '0')}.png`) });
   }
   n++;

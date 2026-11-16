@@ -28,6 +28,22 @@ export const MAX_PLAYERS = 4;
 const MAX_ROOM = 8;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
+// Every session's lockstep inputs are kept on the server's disk (they are only
+// pad words), so that a crash a player reports can be replayed exactly
+// (?replay=<name>, tests/replay.mjs). CDG_RECORD=0 turns this off.
+const RECORDINGS = path.resolve(HERE, '../recordings');
+const RECORD = process.env.CDG_RECORD !== '0';
+function record(r, obj) {
+  if (!RECORD || !r.session) return;
+  try {
+    if (!r.session.rec) {
+      fs.mkdirSync(RECORDINGS, { recursive: true });
+      r.session.rec = path.join(RECORDINGS, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}-${r.code}.jsonl`);
+    }
+    fs.appendFileSync(r.session.rec, JSON.stringify(obj) + '\n');
+  } catch { /* recording is best effort */ }
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -107,7 +123,17 @@ const stats = { discBytes: 0 };
 function handler(req, res) {
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
+  let m0;
   if (p === '/healthz') { res.writeHead(200).end('ok'); return; }
+  if ((m0 = /^\/replay\/([\w.-]+\.jsonl)$/.exec(p))) {
+    // Recorded inputs, for the operator's own replays only (not through a tunnel).
+    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) && !req.headers['x-forwarded-for'] && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(req.headers.host || '');
+    const f = path.join(RECORDINGS, m0[1]);
+    if (!local || !fs.existsSync(f)) { res.writeHead(404).end(); return; }
+    res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store', ...ISOLATION });
+    res.end(fs.readFileSync(f));
+    return;
+  }
   let m;
   if ((m = /^\/disc\/(\d+)\/(\d+)$/.exec(p))) return serveDisc(req, res, m);
   if (p === '/disc/hot.json') {
@@ -194,6 +220,7 @@ function leaveRoom(c) {
     const after = r.session.last.get(c.id) ?? -1;
     r.session.dropped.set(c.id, after);
     broadcast(r, { t: 'drop', id: c.id, after });
+    record(r, { t: 'drop', i: r.session.players.indexOf(c.id), after });
   }
   if (!r.members.length) { rooms.delete(r.code); log(`salon ${r.code} fermé`); return; }
   if (r.host === c.id) r.host = r.members[0];
@@ -344,6 +371,7 @@ function onJson(c, m) {
       log(`salon ${r.code} : partie lancée, ${players.length} joueur(s)`);
       broadcastRoom(r);
       broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, mode: r.mode, cpus: r.cpus | 0 });
+      record(r, { t: 'go', version: manifest?.version, players: players.length, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, mode: r.mode, cpus: r.cpus | 0 });
       return;
     }
     case 'end':
@@ -363,12 +391,14 @@ function onJson(c, m) {
       const lastF = (m.f | 0) + (Array.isArray(m.w) ? m.w.length : 0) - 1;
       r.session.last.set(c.id, Math.max(r.session.last.get(c.id) ?? -1, lastF));
       const s = JSON.stringify({ t: 'in', s: m.s, p: c.id, f: m.f | 0, w: m.w });
+      record(r, { i: r.session.players.indexOf(c.id), f: m.f | 0, w: m.w });
       for (const id of r.members) if (id !== c.id) sendLane(clients.get(id), s);
       return;
     }
     case 'hash': {
       if (!r) return;
       const s = JSON.stringify({ ...m, p: c.id, name: c.name });
+      if (r.session && !(m.f % 600)) record(r, { t: 'hash', f: m.f | 0, h: m.h });
       for (const id of r.members) if (id !== c.id) sendLane(clients.get(id), s);
       return;
     }

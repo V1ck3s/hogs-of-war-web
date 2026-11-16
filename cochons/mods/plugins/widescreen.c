@@ -16,6 +16,8 @@
 #define FEATURE_ID "widescreen"
 
 static void widescreen_activate(void) {
+    /* Room for the wide cone's packets (view_cone.c, packet buffers). */
+    (void)psx_mod_set_main_ram_8mb(1);
     char aspect[16] = "adaptive";
     (void)psx_mod_option_value(PACKAGE_ID, FEATURE_ID, "aspect", aspect, sizeof aspect);
     unsigned num = 0, den = 0;

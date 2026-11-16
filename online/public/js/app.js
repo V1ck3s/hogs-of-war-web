@@ -290,7 +290,7 @@ function reportProblem(kind, extra) {
   if (kind === 'arret') d.exit = exitTrace();
   if (state.worker) state.worker.postMessage({ t: 'diag', kind, extra: d });
   else sendWs({ t: 'diag', kind, d });
-  if (!problemShown && kind !== 'reprise') {
+  if (!problemShown && !['reprise', 'reprise-image', 'webgl-retabli', 'image-figee', 'webgl-perdu'].includes(kind)) {
     problemShown = true;
     toast('Le jeu s’est arrêté de façon inattendue. Le détail a été envoyé au serveur.', 20000);
   }
@@ -298,8 +298,46 @@ function reportProblem(kind, extra) {
 addEventListener('error', (e) => { if (state.game) reportProblem('erreur', { msg: String(e.message).slice(0, 300), at: `${e.filename}:${e.lineno}` }); });
 addEventListener('unhandledrejection', (e) => { if (state.game) reportProblem('erreur', { msg: String(e.reason && (e.reason.stack || e.reason)).slice(0, 500) }); });
 setInterval(() => { if (state.worker) state.worker.postMessage({ t: 'beat', info: pageInfo() }); }, 1000);
+// Picture watchdog: the game goes on but nothing new is drawn for 3 s.
+let lastShown = -1, lastShownAt = 0, lastShownFrame = 0, pictureSent = false;
+setInterval(() => {
+  if (!state.display || !state.game) return;
+  const shown = state.display.frames, f = (state.lastStats || {}).frame || 0, now = performance.now();
+  if (shown !== lastShown) {
+    if (pictureSent) reportProblem('reprise-image', { stalledMs: Math.round(now - lastShownAt) });
+    lastShown = shown; lastShownAt = now; lastShownFrame = f; pictureSent = false;
+  } else if (!pictureSent && now - lastShownAt > 3000 && f > lastShownFrame + 60) {
+    pictureSent = true;
+    const c = $('#canvas');
+    let gl = null;
+    try { const x = c.getContext('webgl2'); gl = x ? { lost: x.isContextLost(), err: x.getError() } : 'none'; } catch (e) { gl = String(e); }
+    reportProblem('image-figee', { gameFramesSince: f - lastShownFrame, gl, contextLost: !!state.glLost,
+      canvas: [c.width, c.height], hidden: document.hidden });
+  }
+}, 1000);
+
+// ?replay=<name>: this page plays back the inputs the server recorded for an
+// earlier session (operator's own debugging, on the server's machine): the
+// game gets the recorded participants and their words, nobody's keys count.
+async function loadReplay(go) {
+  const name = params.get('replay');
+  if (!name || go.snapshot) return go;
+  const text = await (await fetch(`/replay/${encodeURIComponent(name)}`, { cache: 'no-store' })).text();
+  const lines = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const head = lines.find((l) => l.t === 'go');
+  if (!head) throw new Error(`enregistrement ${name} illisible`);
+  const ids = Array.from({ length: head.players }, (_, i) => `replay-${i}`);
+  state.replay = lines.filter((l) => l.t !== 'go').map((l) => (l.t === 'drop'
+    ? { t: 'drop', id: ids[l.i], after: l.after }
+    : { t: 'in', p: ids[l.i], f: l.f, w: l.w }));
+  const v = (await (await fetch('/game/info.json')).json()).version;
+  console.log(`[replay] ${name} : ${head.players} joueur(s), ${state.replay.length} paquets, version ${head.version}` +
+    (head.version !== v ? ` (ATTENTION : jeu actuel ${v})` : ''));
+  return { ...go, players: ids, hostIndex: head.hostIndex, delay: head.delay, mode: head.mode, cpus: head.cpus };
+}
 
 async function startGame(go) {
+  try { go = await loadReplay(go); } catch (e) { console.warn('[replay]', e.message); }
   show('#play');
   $('#splash').hidden = false;
   $('#splash-text').textContent = 'Démarrage du jeu…';
@@ -352,10 +390,12 @@ async function startGame(go) {
         PSX_WEB_PLAYERS: String(go.players.length),
         PSX_WEB_CPUS: String(go.cpus | 0),
         ...(gpu ? { PSX_WEB_GL: '1' } : {}),
-        // The picture is drawn from the command ring (graphics card or
-        // presentation thread): the emulation thread skips rasterizing until
-        // the game reads VRAM back. Same for every participant (lockstep).
-        PSX_WEB_SKIP_NATIVE_RASTER: params.get('raster') === '1' ? '0' : '1',
+        // The emulation thread keeps rasterizing into the authoritative VRAM:
+        // the game reads VRAM back during battles (tens of times in a game),
+        // and skipping left those reads with stale pixels. Same for every
+        // participant (what the game reads must match: lockstep).
+        // (?rasterskip=1: tests only, every peer of a room must use the same.)
+        PSX_WEB_SKIP_NATIVE_RASTER: params.get('rasterskip') === '1' ? '1' : '0',
         ...(params.get('memo') === '0' ? { PSX_OVERLAY_MEMO: '0' } : {}),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
@@ -474,6 +514,7 @@ async function attach(Module, go) {
     start: go.snapshot ? go.f : 0, host: go.hostIndex | 0,
   });
   if (state.lead) w.postMessage({ t: 'lead', n: state.lead });
+  for (const m of state.replay || []) w.postMessage(m);
   for (const q of state.inQueue || []) if (q.s === state.session) w.postMessage(q);
   state.inQueue = [];
   if (go.snapshot) {
@@ -501,6 +542,8 @@ async function attach(Module, go) {
   } catch (e) { console.warn('audio', e); }
   try {
     if (state.gpu) {
+      $('#canvas').addEventListener('webglcontextlost', (e) => { state.glLost = true; reportProblem('webgl-perdu', {}); });
+      $('#canvas').addEventListener('webglcontextrestored', () => { state.glLost = false; reportProblem('webgl-retabli', {}); });
       state.display = new GpuDisplay($('#canvas'), Module, quality(), () => {
         toast('La carte graphique n’a pas pu être utilisée : rechargez la page avec ?gpu=0.', 15000);
       });

@@ -21,10 +21,44 @@
  *
  * The tables live in mod guest memory (Expansion 1, KSEG0 0x9F000000): the
  * first and only allocation of this region, made when the program starts.
+ *
+ * Packet buffers. A battle builds each frame's GPU primitives in one of two
+ * buffers of 0x28000 bytes (160 KB), carved from a single malloc block of
+ * twice that size: db0 = block, db1 = block + 0x28000. The game never checks
+ * for overflow; the 4:3 cone stays well inside, but the wide cone can draw
+ * more than 160 KB of ground and pigs in some camera angles (seen: high view
+ * across the map). db1 then runs past the end of the block over the heap's
+ * last headers (0x801DFFF8), and the next malloc loops forever on the broken
+ * free list (the game freezes) or hands out overlapping blocks (crashes).
+ * With the 8 MB main RAM (requested by widescreen.c's activation), db1 is moved to
+ * 0x80200000, above the retail 2 MB, so that each buffer has 320 KB: db0
+ * keeps the whole malloc block, db1 has 2 MB of otherwise unused RAM. The
+ * heap is not touched (the block is still allocated and freed by the game),
+ * so every heap address stays where the rest of the mods expect it. The move
+ * happens at a guest VBlank, from guest RAM only: identical on every peer.
  */
 #include "mod_plugins.h"
 
 #include <stdint.h>
+
+int psx_ram_8mb_active(void);   /* runtime: expanded main RAM in effect */
+
+#define STATE_HANDLER  0x8002AA50u   /* 0x80042768 in a battle */
+#define STATE_BATTLE   0x80042768u
+#define DB0_BASE       0x80033AC4u   /* packet buffer bases (draw env pair) */
+#define DB1_BASE       0x80037B38u
+#define PKT_SIZE       0x80029194u   /* size of one buffer, 0x28000 in battle */
+#define BATTLE_PKT     0x28000u
+#define DB1_WIDE       0x80200000u   /* db1 above the retail 2 MB */
+
+static void packet_buffers_vblank(void) {
+    if (!psx_ram_8mb_active()) return;
+    if (psx_mod_read_word(STATE_HANDLER) != STATE_BATTLE) return;
+    if (psx_mod_read_word(PKT_SIZE) != BATTLE_PKT) return;
+    const uint32_t db0 = psx_mod_read_word(DB0_BASE);
+    if (psx_mod_read_word(DB1_BASE) != db0 + BATTLE_PKT) return;   /* moved, or not the pair */
+    psx_mod_write_word(DB1_BASE, DB1_WIDE);
+}
 
 #define TABLE_ADDR   0x9F000000u   /* game.toml: lui 0x9F00 in the four loops */
 #define SUBTABLES    9
@@ -70,6 +104,7 @@ static int cone_cells(int k, Cell *out, int cap) {
 }
 
 PSX_MOD_CONSTRUCTOR(cochons_register_view_cone) {
+    (void)psx_mod_register_vblank_plugin("frontschweine.widescreen", packet_buffers_vblank);
     const uint32_t size = SUBTABLES * ENTRIES * 2u;
     const uint32_t base = psx_mod_alloc_guest_memory(size, 4u);
     if (base != TABLE_ADDR) return;   /* the patched loops would read open bus */
