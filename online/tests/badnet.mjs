@@ -48,7 +48,9 @@ const host = await browser('Alice', 1, '16:9');
 await host.page.click('#btn-create');
 await host.page.waitForSelector('#room:not([hidden])');
 roomCode = await host.page.$eval('#room-code2', (e) => e.textContent);
-let guest = await browser('Bruno', 1, '32:9');
+let guest = await browser('Bruno', Number(process.env.QB || 1), process.env.AB || '32:9');
+// THROTTLE_B=n: Bruno's machine n times slower (CPU throttling, workers included where the browser applies it).
+if (process.env.THROTTLE_B) { const cdp = await guest.page.createCDPSession(); await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.THROTTLE_B) }); }
 await guest.page.click('#btn-join');
 await guest.page.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2, { timeout: 30000 });
 await host.page.click('#btn-start');
@@ -131,10 +133,16 @@ async function measureTurn(team, who, other) {
   console.log(`      tour de ${who.name} : ${f1 - f0} images en ${secs.toFixed(1)} s, attente réseau ${w1 - w0} ms ; ${other.name} regarde jusqu’à ${behind} images derrière`);
   return { wait: w1 - w0, frames: f1 - f0, secs };
 }
+const total0 = await Promise.all([host, guest].map((x) => waitOf(x.page)));
 const ta = await measureTurn(1, host, guest);
 check(ta.wait < 500, `pendant son tour, Alice attend le réseau ${ta.wait} ms (Bruno a une mauvaise connexion)`);
 const tb = await measureTurn(2, guest, host);
 check(tb.wait < 500, `pendant son tour, Bruno attend le réseau ${tb.wait} ms malgré sa connexion`);
+// Back to Alice: the turn change waits for Bruno at most the drift bound.
+const tc = await measureTurn(1, host, guest);
+const total1 = await Promise.all([host, guest].map((x) => waitOf(x.page)));
+console.log(`      attente réseau sur toute la bataille : Alice ${total1[0] - total0[0]} ms, Bruno ${total1[1] - total0[1]} ms`);
+check(tc.wait < 1500, `au retour de son tour, Alice attend ${tc.wait} ms`);
 await sleep(5000);
 const [x, y] = await Promise.all([info(host.page), info(guest.page)]);
 check(x.desyncs === 0 && y.desyncs === 0 && (x.hashOk + y.hashOk) > 0, `copies identiques : ${x.hashOk}/${y.hashOk} empreintes égales, ${x.desyncs + y.desyncs} désynchronisation`);
