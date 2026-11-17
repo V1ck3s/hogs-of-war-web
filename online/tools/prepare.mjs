@@ -20,7 +20,8 @@ const arg = (name, def) => {
 const BUILD = arg('--build', path.resolve(ROOT, '../cochons/build-web'));
 const DISC = arg('--disc', path.resolve(ROOT, '../cochons/disc'));
 const OUT = path.join(ROOT, 'game');
-export const CHUNK = 256 * 1024;
+// Streamed chunk size (CDG_CHUNK_KB, default 256).
+export const CHUNK = (+(process.env.CDG_CHUNK_KB || 256) | 0) * 1024;
 
 fs.mkdirSync(OUT, { recursive: true });
 for (const f of ['Cochons_de_Guerre.js', 'Cochons_de_Guerre.wasm']) {
@@ -93,7 +94,7 @@ for (const name of discFiles) {
   if (/\.bin$/i.test(name)) {
     const i = disc.tracks.length;
     disc.tracks.push({ name, size: st.size });
-    add(`disc/${name}.remote`, Buffer.from(`/disc/${i} ${st.size}\n`));
+    add(`disc/${name}.remote`, Buffer.from(`/disc/${i} ${st.size} ${CHUNK}\n`));
   } else if (st.size < 2 * 1024 * 1024 && !/\.json$/i.test(name)) {
     add(`disc/${name}`, fs.readFileSync(p));
   }

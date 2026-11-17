@@ -26,7 +26,7 @@ const logs = [];
 page.on('console', (m) => { logs.push(m.text()); if (logs.length < 400) console.log('[page]', m.text()); });
 page.on('pageerror', (e) => console.log('[page error]', e.message));
 await page.goto(`http://127.0.0.1:${PORT}/?diag=1`);
-await page.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 120000 });
+await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 120000 });
 console.log('préchargement :', await page.$eval('#preload', (e) => e.textContent));
 await page.type('#name', 'Testeur');
 await page.click('#btn-create');

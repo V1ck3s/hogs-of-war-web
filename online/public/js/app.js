@@ -54,11 +54,39 @@ const preload = (async () => {
   const module = await WebAssembly.compile(wasm);
   return { manifest, files: new Uint8Array(files), module, v };
 })();
-preload.then(() => { $('#preload').textContent = 'Jeu chargé : prêt à jouer.'; })
-  .catch((e) => { $('#preload').textContent = `Jeu indisponible : ${e.message}`; });
-$('#preload').textContent = 'Chargement du jeu en arrière-plan…';
+// Preload shown in the lobby and to the room: the game (~5 MB), then the disc
+// chunks games read (boot, menus, battles; ~20-40 MB). With everything in the
+// browser cache, a slow connection only costs the time of this preload.
+const loadState = { game: false, failed: '', disc: null };
+function showLoad() {
+  const d = loadState.disc;
+  const discPart = d && d.total ? d.done / d.total : (d ? 1 : 0);
+  const pct = Math.floor(((loadState.game ? 15 : 0) + 85 * discPart));
+  let text;
+  if (loadState.failed) text = `Jeu indisponible : ${loadState.failed}`;
+  else if (!loadState.game) text = 'Préchargement : le jeu…';
+  else if (d && d.total && d.done < d.total) text = `Préchargement du disque : ${(d.done * d.chunk / 1048576).toFixed(0)} / ${(d.total * d.chunk / 1048576).toFixed(0)} Mo (${pct} %) — vous pouvez lancer avant la fin, le reste arrivera pendant la partie.`;
+  else text = 'Jeu et disque préchargés : prêt à jouer.';
+  $('#preload').textContent = text;
+  const p2 = $('#preload2'); if (p2) p2.textContent = text;
+  if (pct !== state.readySent && (!state.readyAt || Date.now() - state.readyAt > 2000 || pct === 100)) {
+    if (state.ws && state.ws.readyState === 1) {
+      state.readySent = pct; state.readyAt = Date.now();
+      state.ws.send(JSON.stringify({ t: 'ready', pct }));
+    }
+  }
+}
+preload.then(() => { loadState.game = true; showLoad(); })
+  .catch((e) => { loadState.failed = e.message; showLoad(); });
+showLoad();
 // Disc prefetch into the browser cache (lobby first, then read-ahead in game).
-try { new Worker('js/disc-worker.js'); } catch { /* streaming still works */ }
+// ?prefetch=0 (tests): no prefetcher, the disc is read only as the game needs it.
+if (params.get('prefetch') !== '0') {
+  try {
+    const dw = new Worker('js/disc-worker.js');
+    dw.onmessage = (e) => { if (e.data && e.data.t === 'progress') { loadState.disc = e.data; showLoad(); } };
+  } catch { /* streaming still works */ }
+} else loadState.disc = { done: 0, total: 0, chunk: 0 };
 
 // ------------------------------------------------------------------ socket
 function connect() {
@@ -72,7 +100,7 @@ function connect() {
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') { onSnapshot(e.data); return; }
       const m = JSON.parse(e.data);
-      if (m.t === 'welcome') { state.id = m.id; state.key = m.key; resolve(); }
+      if (m.t === 'welcome') { state.id = m.id; state.key = m.key; resolve(); state.readySent = -1; state.readyAt = 0; setTimeout(showLoad, 0); }
       onMessage(m);
     };
     setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'ping', ts: performance.now() })), 2000);
@@ -223,7 +251,8 @@ function onRoom(m) {
     li.className = (who ? '' : 'empty') + (who && who.id === state.id ? ' me' : '');
     const label = document.createElement('span');
     label.className = 'who';
-    label.textContent = `Joueur ${s + 1} : ${who ? who.name + (who.id === m.host ? ' (hôte)' : '') : 'libre'}`;
+    label.textContent = `Joueur ${s + 1} : ${who ? who.name + (who.id === m.host ? ' (hôte)' : '') : 'libre'}` +
+      (who && m.state === 'lobby' && who.ready >= 0 ? (who.ready >= 100 ? ' — prêt' : ` — préchargement ${who.ready} %`) : '');
     li.append(label);
     if (!who && m.state === 'lobby') {
       const b = document.createElement('button');

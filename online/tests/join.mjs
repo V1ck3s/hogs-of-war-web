@@ -35,7 +35,7 @@ async function browser(name, q, aspect) {
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
   await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
-  await page.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+  await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
   return { b, page, name };
 }

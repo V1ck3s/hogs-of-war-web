@@ -83,7 +83,20 @@ function sendFile(req, res, file, cache) {
 // Tests only: CDG_DISC_FAIL=<0..1> answers that share of disc chunk requests
 // with an error, as a flaky link would (tests/discfail.mjs).
 const DISC_FAIL = +(process.env.CDG_DISC_FAIL || 0);
+// Tests only: CDG_DISC_STATS=1 prints, when the server stops, which chunks the
+// browsers fetched (tests/replay.mjs measures what a session reads).
+const DISC_SEEN = process.env.CDG_DISC_STATS === '1' ? new Map() : null;
+if (DISC_SEEN) {
+  process.on('SIGTERM', () => {
+    const per = {};
+    for (const k of DISC_SEEN.keys()) { const t = k.split('/')[0]; per[t] = (per[t] || 0) + 1; }
+    console.log(`disque lu : ${DISC_SEEN.size} morceaux (${(DISC_SEEN.size * (disc?.chunk || 0) / 1048576).toFixed(1)} Mo), par piste ${JSON.stringify(per)}`);
+    if (process.env.CDG_DISC_STATS_OUT) fs.writeFileSync(process.env.CDG_DISC_STATS_OUT, JSON.stringify([...DISC_SEEN.keys()]));
+    process.exit(0);
+  });
+}
 function serveDisc(req, res, m) {
+  if (DISC_SEEN) DISC_SEEN.set(`${m[1]}/${m[2]}`, 1);
   if (DISC_FAIL > 0 && Math.random() < DISC_FAIL) { res.writeHead(503, ISOLATION).end(); return; }
   const t = disc && disc.tracks[+m[1]];
   const i = +m[2];
@@ -92,20 +105,69 @@ function serveDisc(req, res, m) {
   }
   const start = i * disc.chunk;
   const end = Math.min(t.size, start + disc.chunk) - 1;
-  res.writeHead(200, {
-    'content-type': 'application/octet-stream', 'content-length': end - start + 1,
-    'cache-control': 'public, max-age=31536000, immutable', ...ISOLATION,
-  });
-  fs.createReadStream(path.join(disc.dir, t.name), { start, end }).pipe(res);
-  stats.discBytes += end - start + 1;
-  noteHot(+m[1], i);
+  // Game reads (not the page's prefetcher) make the list browsers preload.
+  if (!req.headers['x-cdg-prefetch']) noteHot(+m[1], i);
+  const headers = { 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable', ...ISOLATION };
+  if (!/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+    res.writeHead(200, { ...headers, 'content-length': end - start + 1 });
+    fs.createReadStream(path.join(disc.dir, t.name), { start, end }).pipe(res);
+    stats.discBytes += end - start + 1;
+    return;
+  }
+  // Compressed (about half the bytes for the data track), made once per chunk
+  // and kept on the server's disk next to the game.
+  gzChunk(+m[1], i, t, start, end).then((z) => {
+    res.writeHead(200, { ...headers, 'content-encoding': 'gzip', 'content-length': z.length, vary: 'accept-encoding' });
+    sendThrottled(res, z);
+    stats.discBytes += z.length;
+  }, () => { if (!res.headersSent) res.writeHead(500, ISOLATION); res.end(); });
+}
+
+// Tests only: CDG_DISC_KBPS=<n> caps the disc chunks sent (all browsers
+// together) at n KB/s, as a slow connection would (tests/slowlink.mjs).
+const DISC_KBPS = +(process.env.CDG_DISC_KBPS || 0);
+let discFreeAt = 0;
+function sendThrottled(res, buf) {
+  if (!DISC_KBPS) { res.end(buf); return; }
+  const SLICE = 8192;
+  let off = 0;
+  const step = () => {
+    if (off >= buf.length || res.destroyed) { res.end(); return; }
+    const part = buf.subarray(off, off + SLICE);
+    off += part.length;
+    const now = Date.now();
+    discFreeAt = Math.max(discFreeAt, now) + (part.length / 1024 / DISC_KBPS) * 1000;
+    res.write(part);
+    setTimeout(step, Math.max(0, discFreeAt - now));
+  };
+  step();
+}
+
+const ZDIR = path.join(GAME, 'disc-gz');
+const zPending = new Map();
+function gzChunk(ti, i, t, start, end) {
+  const file = path.join(ZDIR, `${disc.chunk}-${ti}-${i}.gz`);
+  if (zPending.has(file)) return zPending.get(file);
+  const p = fs.promises.readFile(file).catch(async () => {
+    const fh = await fs.promises.open(path.join(disc.dir, t.name), 'r');
+    const buf = Buffer.alloc(end - start + 1);
+    try { await fh.read(buf, 0, buf.length, start); } finally { await fh.close(); }
+    const z = await new Promise((ok, ko) => zlib.gzip(buf, { level: 6 }, (e, r) => (e ? ko(e) : ok(r))));
+    await fs.promises.mkdir(ZDIR, { recursive: true });
+    await fs.promises.writeFile(file, z).catch(() => {});
+    return z;
+  }).finally(() => zPending.delete(file));
+  zPending.set(file, p);
+  return p;
 }
 
 // Chunks games need, in order of first use (boot, menus, battles...): the
 // browsers prefetch them while players gather in the lobby (disc-worker.js).
 const HOT_FILE = path.join(GAME, 'hot.json');
-const HOT_MAX = 480;   // 120 MB
-const hot = new Map((readJson(HOT_FILE)?.chunks || []).map(([t, i]) => [`${t}/${i}`, [t, i]]));
+const HOT_MAX = 320;   // 80 MB (several battles' worth)
+const hotSaved = readJson(HOT_FILE);
+// A list made for another chunk size names other chunks: start again.
+const hot = new Map((hotSaved && hotSaved.chunk === disc?.chunk ? hotSaved.chunks || [] : []).map(([t, i]) => [`${t}/${i}`, [t, i]]));
 let hotDirty = false;
 function noteHot(t, i) {
   const k = `${t}/${i}`;
@@ -116,10 +178,10 @@ function noteHot(t, i) {
 setInterval(() => {
   if (!hotDirty) return;
   hotDirty = false;
-  fs.writeFile(HOT_FILE, JSON.stringify({ chunks: [...hot.values()] }), () => {});
+  fs.writeFile(HOT_FILE, JSON.stringify({ chunk: disc?.chunk, chunks: [...hot.values()] }), () => {});
 }, 10000).unref();
 function hotList() {
-  return { tracks: disc ? disc.tracks.map((t) => Math.ceil(t.size / disc.chunk)) : [], chunks: [...hot.values()] };
+  return { chunk: disc?.chunk, tracks: disc ? disc.tracks.map((t) => Math.ceil(t.size / disc.chunk)) : [], chunks: [...hot.values()] };
 }
 
 const stats = { discBytes: 0 };
@@ -216,7 +278,7 @@ function roomView(r) {
     session: r.session ? { id: r.session.id, players: r.session.players } : null,
     members: r.members.map((id) => {
       const c = clients.get(id);
-      return { id, name: c.name, seat: r.seats.get(id) ?? -1, rtt: c.rtt | 0 };
+      return { id, name: c.name, seat: r.seats.get(id) ?? -1, rtt: c.rtt | 0, ready: c.ready ?? -1 };
     }),
   };
 }
@@ -441,6 +503,14 @@ function onJson(c, m) {
     case 'ping':
       send(c, { t: 'pong', ts: m.ts });
       return;
+    case 'ready': {
+      // How much of the game and its preload list this player has (0-100).
+      const v = Math.max(0, Math.min(100, m.pct | 0));
+      if (v === c.ready) return;
+      c.ready = v;
+      if (r) broadcastRoom(r);
+      return;
+    }
     case 'rtt':
       c.rtt = Math.max(0, Math.min(5000, +m.rtt || 0));
       if (r) {

@@ -13,6 +13,7 @@ const pendingHashes = new Map(); // peers' digests for frames I have not reached
 let timer = 0;
 let lead = 0;
 const inbox = [];   // recent remote 'in' messages (see 'resync')
+let outPend = null; // my words not sent yet (see tick)
 
 // Lane: this worker's own socket to the server for lockstep traffic, so that
 // inputs and digests never wait for the page's main thread. Until it is open
@@ -58,8 +59,20 @@ function tick() {
   // Last frame the game consumed; a game that just loaded a snapshot has not
   // consumed any of the new schedule yet: count from its first frame.
   const cur = Math.max(Atomics.load(mem.u32, status), ls.start);
+  // My words reach my own game at once; to the others they go 4 frames at a
+  // time (a quarter of the messages: ~2 KB/s instead of ~7 KB/s). Only
+  // players watching me see them later (at most 60 ms): the game never waits
+  // for my words on my own machine.
   const batch = ls.local(cur, word);
-  if (batch) sendNet({ t: 'in', f: batch.f, w: batch.w });
+  const now = performance.now();
+  if (batch) {
+    if (!outPend) outPend = { f: batch.f, w: [], at: now };
+    outPend.w.push(...batch.w);
+  }
+  if (outPend && (outPend.w.length >= 4 || now - outPend.at >= 60)) {
+    sendNet({ t: 'in', f: outPend.f, w: outPend.w });
+    outPend = null;
+  }
   // Each participant's words go to the game as soon as they are known; the
   // game waits only for the one in control (psx_lockstep_web.c).
   ls.pump(cur + mem.ring - 8, (p, f, w) => {
@@ -180,6 +193,7 @@ function handle(m) {
       // ring is emptied first so that the game never takes a stale frame of
       // the previous schedule (peers ahead of the snapshot rewind to it).
       ls = new Lockstep({ players: m.players, me: m.me, delay: m.delay, start: m.start, host: m.host });
+      outPend = null;
       resetGone();
       for (const [i, after] of m.dropped || []) { ls.drop(i, after); setGone(i, after); }
       // Words that arrived before this resync (a joining player starts sending

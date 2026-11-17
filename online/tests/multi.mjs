@@ -31,7 +31,7 @@ async function browser(name, viewport) {
   page.on('console', (m) => { const t = m.text(); if (/lockstep|Désynchro|error/i.test(t) && !/frame \d/.test(t)) console.log(`[${name}]`, t); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
   await page.goto(`http://127.0.0.1:${PORT}/${name === 'hote' ? '' : '?salon=' + roomCode}`);
-  await page.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+  await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name === 'hote' ? 'Hôte' : 'Invité');
   return { b, page, name };
 }

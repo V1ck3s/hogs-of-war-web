@@ -14,6 +14,19 @@ const urgent = [];         // read-ahead, most recent position first
 const background = [];     // hot list
 let running = 0;
 let tracks = [];           // chunk counts per track
+const cached = new Set();  // URLs now in the browser cache
+let hotUrls = [];          // the preload list
+// Progress of the preload list, for the page (lobby: "préchargement 40 %").
+let reported = -1;
+function report() {
+  if (!hotUrls.length) return;
+  let n = 0;
+  for (const u of hotUrls) if (cached.has(u)) n++;
+  if (n === reported) return;
+  reported = n;
+  postMessage({ t: 'progress', done: n, total: hotUrls.length, chunk: chunkBytes });
+}
+let chunkBytes = 262144;
 
 function want(url, front) {
   if (done.has(url)) return;
@@ -33,7 +46,8 @@ function pump() {
     if (!url) return;
     done.add(url);
     running++;
-    fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status))))
+    fetch(url, { headers: { 'x-cdg-prefetch': '1' } }).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status))))
+      .then(() => { cached.add(url); report(); })
       .catch(() => done.delete(url))
       .finally(() => { running--; pump(); });
   }
@@ -46,6 +60,8 @@ bc.onmessage = (e) => {
   if (!m) return;
   const t = +m[1], i = +m[2];
   done.add(e.data);
+  cached.add(e.data);
+  report();
   const n = tracks[t] ?? Infinity;
   // Newest position first: drop read-ahead queued for older positions.
   urgent.length = 0;
@@ -56,6 +72,10 @@ bc.onmessage = (e) => {
   try {
     const hot = await (await fetch('/disc/hot.json', { cache: 'no-store' })).json();
     tracks = hot.tracks || [];
-    for (const [t, i] of hot.chunks || []) want(`/disc/${t}/${i}`, false);
+    chunkBytes = hot.chunk || chunkBytes;
+    hotUrls = (hot.chunks || []).map(([t, i]) => `/disc/${t}/${i}`);
+    for (const u of hotUrls) want(u, false);
+    if (!hotUrls.length) postMessage({ t: 'progress', done: 0, total: 0, chunk: chunkBytes });
+    report();
   } catch { /* no list yet: read-ahead only */ }
 })();
