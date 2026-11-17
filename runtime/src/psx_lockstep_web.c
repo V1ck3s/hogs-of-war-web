@@ -6,7 +6,14 @@
  * waits for that participant's word only: a turn-based game never waits for a
  * player who is not playing, so a slow or distant peer slows nobody but
  * themselves, and the player in control needs no input delay for the others'
- * sake. Every peer reads the same word on the same frame: same simulation. */
+ * sake. Every peer reads the same word on the same frame: same simulation.
+ * One bound keeps it fair: a peer runs at most DRIFT frames ahead of any
+ * other participant still there. A machine a little slower than the others
+ * would otherwise fall behind for a whole round and make everyone wait for
+ * it for many seconds when its turn comes; bounded, the session runs at the
+ * pace of the slowest machine and a turn change waits at most DRIFT frames.
+ * DRIFT is well above a word's travel time, so a distant peer on a working
+ * link never slows anyone. */
 #include "psx_lockstep.h"
 #include "mod_plugins.h"
 
@@ -20,6 +27,7 @@
 #define MAXP 4u
 #define STRIDE MAXP
 #define PRESENT 0xFFFFFFFFu
+#define DRIFT 60u
 
 /* s_tag[f % RING][p] = f + 1 once s_words[f % RING][p] is participant p's
  * word for frame f. s_gone_after[p]: last frame of a participant who left
@@ -84,8 +92,27 @@ static int gone_at(uint32_t p, uint32_t frame) {
     return a != PRESENT && a < frame;
 }
 
+/* First frame of this run of consecutive frames (0, or a snapshot's frame):
+ * no participant's words exist before it. */
+static uint32_t s_base, s_prev = 0xFFFFFFFFu;
+
+/* Wait until participant p's word for frame g is here (or p has left).
+ * Returns 1 when a snapshot load interrupts the wait. */
+static int wait_word(uint32_t p, uint32_t g, double *t0) {
+    const uint32_t i = g % RING;
+    while (s_tag[i][p] < g + 1u && !gone_at(p, g)) {
+        s_status[7] = p + 1u;
+        if (mailbox() || psx_lockstep_loading()) return 1;
+        if (!*t0) *t0 = emscripten_get_now();
+        emscripten_futex_wait((void *)&s_tag[i][p], s_tag[i][p], 20.0);
+    }
+    return 0;
+}
+
 static int web_provider(uint32_t frame, uint16_t pads[2]) {
     const uint32_t i = frame % RING;
+    if (frame != s_prev + 1u) s_base = frame;
+    s_prev = frame;
     const uint32_t n = s_nplayers > MAXP ? MAXP : (s_nplayers ? s_nplayers : 1u);
     if (frame < 3 || frame % 500u == 0u)
         emscripten_log(EM_LOG_CONSOLE, "psxrecomp: lockstep frame %u", (unsigned)frame);
@@ -103,22 +130,13 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
     int who = -1;
     for (uint32_t k = 0; k < nc && who < 0; k++) {
         const uint32_t p = chain[k];
-        for (;;) {
-            if (s_tag[i][p] == frame + 1u) { word = s_words[i][p]; who = (int)p; break; }
-            if (gone_at(p, frame)) break;
-            s_status[7] = p + 1u;
-            if (mailbox() || psx_lockstep_loading()) {
-                /* A snapshot replaces this machine at the next safe point: run
-                 * on with neutral pads until then (the frame numbering
-                 * restarts at the snapshot's). */
-                s_status[7] = 0;
-                pads[0] = pads[1] = 0xFFFFu;
-                return 1;
-            }
-            if (!t0) t0 = emscripten_get_now();
-            emscripten_futex_wait((void *)&s_tag[i][p], s_tag[i][p], 20.0);
-        }
+        if (wait_word(p, frame, &t0)) goto loading;
+        if (s_tag[i][p] == frame + 1u) { word = s_words[i][p]; who = (int)p; }
     }
+    /* Never more than DRIFT frames ahead of anyone still there. */
+    if (frame >= s_base + DRIFT)
+        for (uint32_t p = 0; p < n; p++)
+            if ((int)p != who && wait_word(p, frame - DRIFT, &t0)) goto loading;
     s_status[7] = 0;
     (void)mailbox();
     if (t0) s_wait_ms_total += (uint32_t)(emscripten_get_now() - t0);
@@ -141,6 +159,13 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         s_status[6] = frame;
     }
+    return 1;
+loading:
+    /* A snapshot replaces this machine at the next safe point: run on with
+     * neutral pads until then (the frame numbering restarts at the
+     * snapshot's). */
+    s_status[7] = 0;
+    pads[0] = pads[1] = 0xFFFFu;
     return 1;
 }
 
