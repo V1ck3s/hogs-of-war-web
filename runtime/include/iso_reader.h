@@ -77,6 +77,7 @@ struct BinSegment {
     // (<bin>.remote holds "URL SIZE"); empty for a local file.
     std::string   remote_url;
     uint64_t      remote_size = 0;
+    uint64_t      remote_chunk = 256u * 1024u;   /* bytes per streamed chunk */
 };
 
 /**

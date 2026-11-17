@@ -17,22 +17,22 @@
  * request from the emulation pthread (a worker), kept in an LRU cache. Chunk
  * URLs are immutable, so the browser's HTTP cache keeps them across visits. */
 namespace {
-constexpr uint64_t kRemoteChunk = 256u * 1024u;
-constexpr size_t   kRemoteCacheChunks = 384;           /* 96 MiB */
+constexpr uint64_t kRemoteCacheBytes = 96u * 1024u * 1024u;
+uint64_t g_remote_bytes = 0;
 struct RemoteChunk { std::vector<uint8_t> data; std::list<std::string>::iterator lru; };
 std::unordered_map<std::string, RemoteChunk> g_remote_cache;
 std::list<std::string> g_remote_lru;
 
 const std::vector<uint8_t>* remote_chunk(const std::string& url, uint64_t index,
-                                         uint64_t size) {
+                                         uint64_t size, uint64_t chunk) {
     const std::string key = url + "/" + std::to_string(index);
     auto it = g_remote_cache.find(key);
     if (it != g_remote_cache.end()) {
         g_remote_lru.splice(g_remote_lru.begin(), g_remote_lru, it->second.lru);
         return &it->second.data;
     }
-    const uint64_t off = index * kRemoteChunk;
-    const uint64_t len = std::min<uint64_t>(kRemoteChunk, size - off);
+    const uint64_t off = index * chunk;
+    const uint64_t len = std::min<uint64_t>(chunk, size - off);
     std::vector<uint8_t> data(len);
     /* The disc comes over the network (often a tunnel): a chunk that does not
      * arrive is asked for again, with a growing pause, for about two minutes
@@ -70,10 +70,15 @@ const std::vector<uint8_t>* remote_chunk(const std::string& url, uint64_t index,
         std::fprintf(stderr, "psxrecomp: disc chunk %s failed\n", key.c_str());
         return nullptr;
     }
-    if (g_remote_cache.size() >= kRemoteCacheChunks) {
-        g_remote_cache.erase(g_remote_lru.back());
+    while (!g_remote_lru.empty() && g_remote_bytes + len > kRemoteCacheBytes) {
+        auto old = g_remote_cache.find(g_remote_lru.back());
+        if (old != g_remote_cache.end()) {
+            g_remote_bytes -= old->second.data.size();
+            g_remote_cache.erase(old);
+        }
         g_remote_lru.pop_back();
     }
+    g_remote_bytes += len;
     g_remote_lru.push_front(key);
     RemoteChunk& c = g_remote_cache[key];
     c.data = std::move(data);
@@ -89,10 +94,10 @@ static bool seg_read(PS1::BinSegment* seg, uint64_t offset, uint8_t* out, size_t
     if (!seg->remote_url.empty()) {
         if (offset + len > seg->remote_size) return false;
         while (len) {
-            const uint64_t index = offset / kRemoteChunk;
-            const std::vector<uint8_t>* c = remote_chunk(seg->remote_url, index, seg->remote_size);
+            const uint64_t index = offset / seg->remote_chunk;
+            const std::vector<uint8_t>* c = remote_chunk(seg->remote_url, index, seg->remote_size, seg->remote_chunk);
             if (!c) return false;
-            const uint64_t in = offset - index * kRemoteChunk;
+            const uint64_t in = offset - index * seg->remote_chunk;
             const size_t n = (size_t)std::min<uint64_t>(len, c->size() - in);
             std::memcpy(out, c->data() + in, n);
             out += n; offset += n; len -= n;
@@ -419,11 +424,14 @@ bool ISOReader::Open(const std::string& filename) {
         {
             std::ifstream remote(bin_name + ".remote");
             std::string url;
-            uint64_t remote_size = 0;
+            uint64_t remote_size = 0, remote_chunk_bytes = 0;
             if (remote && (remote >> url >> remote_size) && remote_size > 0) {
                 seg.remote_url = url;
                 seg.remote_size = remote_size;
                 size = remote_size;
+                /* Optional third field: chunk size (default 256 KB). */
+                if ((remote >> remote_chunk_bytes) && remote_chunk_bytes >= 2352u)
+                    seg.remote_chunk = remote_chunk_bytes;
             }
         }
         if (seg.remote_url.empty()) {
