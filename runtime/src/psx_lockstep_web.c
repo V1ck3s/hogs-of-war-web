@@ -196,3 +196,25 @@ EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_lockstep_gone(void) { return (uintptr_t)s
 EMSCRIPTEN_KEEPALIVE uint32_t psx_web_peek32(uint32_t addr) { return psx_mod_read_word(addr); }
 /* Tests only (single player): store a guest word from the page's thread. */
 EMSCRIPTEN_KEEPALIVE void psx_web_poke32(uint32_t addr, uint32_t value) { psx_mod_write_word(addr, value); }
+
+/* Interpreted-code profile, for the page's tests (read-only, racy snapshot):
+ * fills a buffer with [count, then per PC: pc, insns (low 32 bits), occ_crc,
+ * occ_ok] for the dirty-RAM interpreter's busiest entry PCs, so a test can
+ * diff two snapshots and name the code that still runs interpreted. */
+#include "dirty_ram_interp.h"
+#define DIRTY_SNAP_MAX 16384u
+static uint32_t s_dirty_snap[1 + 4 * DIRTY_SNAP_MAX];
+EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_dirty_pcs(void) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < DIRTY_RAM_PC_TABLE_SIZE && n < DIRTY_SNAP_MAX; i++) {
+        const DirtyRamPcEntry *e = &g_dirty_ram_pc_table[i];
+        if (e->pc == 0 || e->insns < 1000u) continue;
+        uint32_t *row = &s_dirty_snap[1 + 4 * n++];
+        row[0] = e->pc;
+        row[1] = (uint32_t)e->insns;
+        row[2] = e->occ_crc;
+        row[3] = e->occ_ok;
+    }
+    s_dirty_snap[0] = n;
+    return (uintptr_t)s_dirty_snap;
+}
