@@ -310,8 +310,11 @@ overlay_region_floor = "0x18000"
 # Hottest interpreted entry PCs measured in a French multiplayer battle
 # (dirty_ram_stats, insns > 200k). Same mechanism as Frontschweine's list:
 # no load_addr/bytes_crc; byte guards select the matching shard at runtime.
+# 0x8005FA68: loop head of the battle terrain renderer (0x8005F5CC family);
+# its back edge leaves native code there, so every iteration ran interpreted
+# while aiming through a scope (most of the frame: half speed).
 [[overlays]]
-entries = ["0x80040FE4", "0x80046E70", "0x80047A9C", "0x80047DB8", "0x80047F9C", "0x8004B3D4", "0x8004C1AC", "0x8004ED38", "0x8004F058", "0x80051490", "0x8005C494", "0x8005C4DC", "0x8005D000", "0x8005E260", "0x8006350C", "0x80063DFC", "0x80065EF4", "0x80071464", "0x800719A4", "0x80085830", "0x80085838", "0x80085C00", "0x80085C28", "0x8009DC80", "0x800AA3B0", "0x800CE6DC", "0x800CF714", "0x800E33F4", "0x800E3408"]
+entries = ["0x8005FA68", "0x80040FE4", "0x80046E70", "0x80047A9C", "0x80047DB8", "0x80047F9C", "0x8004B3D4", "0x8004C1AC", "0x8004ED38", "0x8004F058", "0x80051490", "0x8005C494", "0x8005C4DC", "0x8005D000", "0x8005E260", "0x8006350C", "0x80063DFC", "0x80065EF4", "0x80071464", "0x800719A4", "0x80085830", "0x80085838", "0x80085C00", "0x80085C28", "0x8009DC80", "0x800AA3B0", "0x800CE6DC", "0x800CF714", "0x800E33F4", "0x800E3408"]
 
 # Widescreen tuning from Frontschweine (addresses below the FR/DE shift point,
 # identical in both releases). adaptive_view lets the streaming server set any

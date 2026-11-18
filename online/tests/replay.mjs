@@ -36,7 +36,7 @@ const page = await b.newPage();
 await page.setViewport({ width: 1100, height: 620 });
 page.on('console', (m) => { const t = m.text(); if (!/lockstep frame|GL Driver Message/.test(t)) console.log('[page]', t.slice(0, 300)); });
 page.on('pageerror', (e) => console.log('[page error]', e.message));
-await page.goto(`http://127.0.0.1:${PORT}/?replay=${encodeURIComponent(name)}&q=${process.env.Q || 1}${process.env.GPU === '0' ? '&gpu=0' : ''}${process.env.PREFETCH === '0' ? '&prefetch=0' : ''}`);
+await page.goto(`http://127.0.0.1:${PORT}/?replay=${encodeURIComponent(name)}&q=${process.env.Q || 1}${process.env.GPU === '0' ? '&gpu=0' : ''}${process.env.PREFETCH === '0' ? '&prefetch=0' : ''}${process.env.DIAG ? '&diag=1' : ''}`);
 await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, process.env.ASPECT || '16:9');
 await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.click('#btn-create');
@@ -57,12 +57,64 @@ async function dumpRam(tag) {
   fs.writeFileSync(path.join(out, `ram_${tag}.bin`), Buffer.from(b64, 'base64'));
   console.log(`      RAM enregistrée : ram_${tag}.bin`);
 }
+// PROFILE_AT=f (PROFILE_MS, default 8000): CPU profile of every worker thread
+// once the game passes frame f; top functions by own time in profile_<f>.txt.
+async function profileWorkers(f) {
+  const ms = +(process.env.PROFILE_MS || 8000);
+  const ws = page.workers();
+  const sessions = [];
+  for (const w of ws) {
+    try { const c = w.client; await c.send('Profiler.enable'); await c.send('Profiler.setSamplingInterval', { interval: 500 }); await c.send('Profiler.start'); sessions.push([w, c]); } catch { /* gone */ }
+  }
+  const f0 = await frame();
+  await sleep(ms);
+  const f1 = await frame();
+  let text = `images ${f0} -> ${f1} en ${ms} ms\n`;
+  for (const [w, c] of sessions) {
+    let prof;
+    try { ({ profile: prof } = await c.send('Profiler.stop')); } catch { continue; }
+    const self = new Map(); let total = 0;
+    const dt = prof.timeDeltas || [];
+    const byId = new Map(prof.nodes.map((n) => [n.id, n]));
+    (prof.samples || []).forEach((id, i) => { const n = byId.get(id); const k = n.callFrame.functionName || '(anon)'; const d = dt[i] || 0; self.set(k, (self.get(k) || 0) + d); total += d; });
+    const idle = (self.get('(idle)') || 0) + (self.get('(program)') || 0);
+    if (total - idle < ms * 1000 * 0.2) continue;   /* mostly idle thread */
+    text += `\n== ${w.url().slice(-60)} : ${(total / 1000) | 0} ms échantillonnés\n`;
+    for (const [k, v] of [...self].sort((a, b) => b[1] - a[1]).slice(0, 40)) text += `${(100 * v / total).toFixed(1).padStart(5)}%  ${k}\n`;
+  }
+  fs.writeFileSync(path.join(out, `profile_${f}.txt`), text);
+  console.log(`      profil écrit : profile_${f}.txt`);
+}
+// DIRTY_AT=f1,f2,...: the interpreter's per-PC counters (cumulative) at those
+// frames, in dirty_<f>.json (diff two to see what ran interpreted between).
+async function dirtySnap(f) {
+  const rows = await page.evaluate(() => {
+    const g = window.__cdg.state.game, p = g._psx_web_dirty_pcs() >>> 2, h = g.HEAPU32;
+    const n = h[p], out = [];
+    for (let i = 0; i < n; i++) { const r = p + 1 + 4 * i; out.push({ pc: '0x' + (h[r] >>> 0).toString(16).padStart(8, '0'), insns: h[r + 1] >>> 0, occ_crc: '0x' + (h[r + 2] >>> 0).toString(16), occ_ok: h[r + 3] }); }
+    return out;
+  });
+  fs.writeFileSync(path.join(out, `dirty_${f}.json`), JSON.stringify({ frame: f, per_pc: rows }));
+  console.log(`      interpréteur : dirty_${f}.json (${rows.length} PC)`);
+}
+const dirtyAt = (process.env.DIRTY_AT || '').split(',').filter(Boolean).map(Number);
+const profAt = (process.env.PROFILE_AT || '').split(',').filter(Boolean).map(Number);
 let last = 0, lastT = Date.now(), frozen = false, shot = 0;
 const t0 = Date.now();
+// SPEED=1: game frames per second of wall time (the replay runs unthrottled,
+// so this is how heavy each stretch of the game is), with a picture every 5 s.
+const speed = process.env.SPEED ? fs.openSync(path.join(out, 'speed.csv'), 'w') : null;
+let sf = 0, sn = 0;
 for (;;) {
   await sleep(1000);
   const f = await frame();
+  if (speed) {
+    fs.writeSync(speed, `${f},${f - sf}\n`); sf = f;
+    if (++sn % 5 === 0) await page.screenshot({ path: path.join(out, `s_${String(f).padStart(6, '0')}.png`) });
+  }
   if (f !== last) { last = f; lastT = Date.now(); } else if (Date.now() - lastT > 15000) { frozen = true; break; }
+  while (dirtyAt.length && f >= dirtyAt[0]) await dirtySnap(dirtyAt.shift());
+  while (profAt.length && f >= profAt[0]) { const at = profAt.shift(); await profileWorkers(at); lastT = Date.now(); }
   while (dumps.length && f >= dumps[0]) { dumps.shift(); await dumpRam(String(await frame())); await page.screenshot({ path: path.join(out, `d_${await frame()}.png`) }); }
   if (f >= UNTIL) break;
   if (Date.now() - t0 > shot * 30000) { console.log(`      t=${((Date.now() - t0) / 1000) | 0}s image ${f}`); await page.screenshot({ path: path.join(out, `r_${String(shot).padStart(3, '0')}.png`) }); shot++; }
