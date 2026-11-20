@@ -33,15 +33,30 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 // (?replay=<name>, tests/replay.mjs). CDG_RECORD=0 turns this off.
 const RECORDINGS = path.resolve(HERE, '../recordings');
 const RECORD = process.env.CDG_RECORD !== '0';
+// Lines wait in memory and reach the disk a few times a second, off the
+// event loop: a slow disk never delays the relay of the players' inputs.
+const recPending = new Map();   // file -> lines not written yet
+let recBusy = false;
+function flushRecordings(sync) {
+  if (!recPending.size || (recBusy && !sync)) return;
+  const batch = [...recPending];
+  recPending.clear();
+  if (sync) { for (const [f, lines] of batch) { try { fs.appendFileSync(f, lines.join('')); } catch { /* best effort */ } } return; }
+  recBusy = true;
+  Promise.all(batch.map(([f, lines]) => fs.promises.appendFile(f, lines.join('')).catch(() => {})))
+    .finally(() => { recBusy = false; });
+}
+setInterval(flushRecordings, 250).unref();
+process.on('exit', () => flushRecordings(true));
 function record(r, obj) {
   if (!RECORD || !r.session) return;
-  try {
-    if (!r.session.rec) {
-      fs.mkdirSync(RECORDINGS, { recursive: true });
-      r.session.rec = path.join(RECORDINGS, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}-${r.code}.jsonl`);
-    }
-    fs.appendFileSync(r.session.rec, JSON.stringify(obj) + '\n');
-  } catch { /* recording is best effort */ }
+  if (!r.session.rec) {
+    try { fs.mkdirSync(RECORDINGS, { recursive: true }); } catch { return; }
+    r.session.rec = path.join(RECORDINGS, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}-${r.code}.jsonl`);
+  }
+  let q = recPending.get(r.session.rec);
+  if (!q) recPending.set(r.session.rec, q = []);
+  q.push(JSON.stringify(obj) + '\n');
 }
 
 const MIME = {
@@ -63,14 +78,61 @@ function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } ca
 let manifest = readJson(path.join(GAME, 'files.json'));
 let disc = readJson(path.join(GAME, 'disc.json'));
 
+// Static files. Compressible ones are sent Brotli- or gzip-compressed:
+//   * the game's big files have ready-made <file>.br / <file>.gz next to them
+//     (tools/prepare.mjs, best ratio, made once);
+//   * the page's small files are compressed once in memory;
+//   * a big file without a ready-made variant is gzip-compressed on the fly.
+// Each answer carries an ETag, so a page reload re-downloads nothing.
+const COMPRESSIBLE = /wasm|javascript|json|html|css|svg|octet-stream/;
+const SMALL = 512 * 1024;
+const zmem = new Map();   // `${file}|${encoding}` -> { tag, buf }
+function accepted(req) {
+  const a = req.headers['accept-encoding'] || '';
+  return { br: /\bbr\b/.test(a), gzip: /\bgzip\b/.test(a) };
+}
+async function compressedBody(file, st, tag, enc) {
+  // Ready-made variant, if it is not older than the file itself.
+  const side = `${file}.${enc === 'br' ? 'br' : 'gz'}`;
+  try {
+    const zs = await fs.promises.stat(side);
+    if (zs.isFile() && zs.mtimeMs >= st.mtimeMs) return { size: zs.size, stream: () => fs.createReadStream(side) };
+  } catch { /* none */ }
+  if (st.size > SMALL) return null;
+  const key = `${file}|${enc}`;
+  let m = zmem.get(key);
+  if (!m || m.tag !== tag) {
+    const raw = await fs.promises.readFile(file);
+    const buf = enc === 'br'
+      ? zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length } })
+      : zlib.gzipSync(raw, { level: 9 });
+    m = { tag, buf };
+    zmem.set(key, m);
+  }
+  return { size: m.buf.length, buf: m.buf };
+}
 function sendFile(req, res, file, cache) {
-  fs.stat(file, (err, st) => {
+  fs.stat(file, async (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404, { 'content-type': 'text/plain', ...ISOLATION }).end('404'); return; }
     const type = MIME[path.extname(file)] || 'application/octet-stream';
-    const headers = { 'content-type': type, 'cache-control': cache, ...ISOLATION };
-    const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '') && /wasm|javascript/.test(type);
-    if (gzip) {
-      res.writeHead(200, { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' });
+    const tag = `"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
+    const headers = { 'content-type': type, 'cache-control': cache, etag: tag, ...ISOLATION };
+    const zip = COMPRESSIBLE.test(type);
+    if (zip) headers.vary = 'accept-encoding';
+    if (req.headers['if-none-match'] === tag) { res.writeHead(304, headers).end(); return; }
+    const acc = zip ? accepted(req) : {};
+    try {
+      for (const enc of ['br', 'gzip']) {
+        if (!acc[enc]) continue;
+        const z = await compressedBody(file, st, tag, enc);
+        if (!z) continue;
+        res.writeHead(200, { ...headers, 'content-encoding': enc, 'content-length': z.size });
+        if (z.buf) res.end(z.buf); else z.stream().pipe(res);
+        return;
+      }
+    } catch { /* fall back to the plain file */ }
+    if (acc.gzip) {
+      res.writeHead(200, { ...headers, 'content-encoding': 'gzip' });
       fs.createReadStream(file).pipe(zlib.createGzip({ level: 6 })).pipe(res);
     } else {
       res.writeHead(200, { ...headers, 'content-length': st.size });
@@ -86,14 +148,11 @@ const DISC_FAIL = +(process.env.CDG_DISC_FAIL || 0);
 // Tests only: CDG_DISC_STATS=1 prints, when the server stops, which chunks the
 // browsers fetched (tests/replay.mjs measures what a session reads).
 const DISC_SEEN = process.env.CDG_DISC_STATS === '1' ? new Map() : null;
-if (DISC_SEEN) {
-  process.on('SIGTERM', () => {
-    const per = {};
-    for (const k of DISC_SEEN.keys()) { const t = k.split('/')[0]; per[t] = (per[t] || 0) + 1; }
-    console.log(`disque lu : ${DISC_SEEN.size} morceaux (${(DISC_SEEN.size * (disc?.chunk || 0) / 1048576).toFixed(1)} Mo), par piste ${JSON.stringify(per)}`);
-    if (process.env.CDG_DISC_STATS_OUT) fs.writeFileSync(process.env.CDG_DISC_STATS_OUT, JSON.stringify([...DISC_SEEN.keys()]));
-    process.exit(0);
-  });
+function discStats() {
+  const per = {};
+  for (const k of DISC_SEEN.keys()) { const t = k.split('/')[0]; per[t] = (per[t] || 0) + 1; }
+  console.log(`disque lu : ${DISC_SEEN.size} morceaux (${(DISC_SEEN.size * (disc?.chunk || 0) / 1048576).toFixed(1)} Mo), par piste ${JSON.stringify(per)}`);
+  if (process.env.CDG_DISC_STATS_OUT) fs.writeFileSync(process.env.CDG_DISC_STATS_OUT, JSON.stringify([...DISC_SEEN.keys()]));
 }
 function serveDisc(req, res, m) {
   if (DISC_SEEN) DISC_SEEN.set(`${m[1]}/${m[2]}`, 1);
@@ -175,11 +234,13 @@ function noteHot(t, i) {
   hot.set(k, [t, i]);
   hotDirty = true;
 }
-setInterval(() => {
+function saveHot(sync) {
   if (!hotDirty) return;
   hotDirty = false;
-  fs.writeFile(HOT_FILE, JSON.stringify({ chunk: disc?.chunk, chunks: [...hot.values()] }), () => {});
-}, 10000).unref();
+  const text = JSON.stringify({ chunk: disc?.chunk, chunks: [...hot.values()] });
+  if (sync) { try { fs.writeFileSync(HOT_FILE, text); } catch { /* best effort */ } } else fs.writeFile(HOT_FILE, text, () => {});
+}
+setInterval(saveHot, 10000).unref();
 function hotList() {
   return { chunk: disc?.chunk, tracks: disc ? disc.tracks.map((t) => Math.ceil(t.size / disc.chunk)) : [], chunks: [...hot.values()] };
 }
@@ -222,7 +283,8 @@ function handler(req, res) {
     res.end(JSON.stringify({ ready: !!manifest, version: manifest?.version, maxPlayers: MAX_PLAYERS }));
     return;
   }
-  if ((m = /^\/game\/([\w.-]+)$/.exec(p))) {
+  // Only what the page loads (not the server's own notes kept in that folder).
+  if ((m = /^\/game\/(Cochons_de_Guerre\.(?:js|wasm)|files\.(?:json|bin))$/.exec(p))) {
     // Versioned by the page (?v=...), so the browser may keep them.
     const cache = url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'no-cache';
     return sendFile(req, res, path.join(GAME, m[1]), cache);
@@ -580,4 +642,10 @@ export function start({ port = PORT, host = HOST } = {}) {
   return { server, wss, rooms, clients, stats, reload() { manifest = readJson(path.join(GAME, 'files.json')); disc = readJson(path.join(GAME, 'disc.json')); } };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) start();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  start();
+  // Stopped by the operator (or a test): what is still in memory goes to disk.
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.once(sig, () => { flushRecordings(true); saveHot(true); if (DISC_SEEN) discStats(); process.exit(0); });
+  }
+}

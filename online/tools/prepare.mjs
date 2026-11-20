@@ -4,11 +4,18 @@
 //                                      browser's in-memory filesystem
 //   game/disc.json                     the disc tracks, streamed in chunks by
 //                                      the server (never copied here)
+//   game/<file>.br, game/<file>.gz     the same files compressed once, as the
+//                                      server sends them (CDG_BROTLI=<0..11>
+//                                      sets the Brotli effort, default 11 —
+//                                      about two minutes; 0 skips this step
+//                                      and the server compresses on the fly)
 //
 //   node tools/prepare.mjs [--build ../cochons/build-web] [--disc ../cochons/disc]
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -110,3 +117,26 @@ fs.writeFileSync(path.join(OUT, 'files.json'), JSON.stringify({ version, files }
 fs.writeFileSync(path.join(OUT, 'disc.json'), JSON.stringify({ ...disc, dir: DISC }, null, 1));
 console.log(`game/ prêt : version ${version}, ${files.length} fichiers (${(bin.length / 1024).toFixed(0)} Ko), ` +
   `${disc.tracks.length} pistes en streaming (${(disc.tracks.reduce((a, t) => a + t.size, 0) / 1048576).toFixed(0)} Mo)`);
+
+// ---- what the browsers download, compressed once (the server sends these as they are)
+const Q = Math.max(0, Math.min(11, +(process.env.CDG_BROTLI ?? 11) | 0));
+const SENT = ['Cochons_de_Guerre.wasm', 'Cochons_de_Guerre.js', 'files.bin', 'files.json'];
+for (const f of SENT) for (const ext of ['.br', '.gz']) fs.rmSync(path.join(OUT, f + ext), { force: true });
+if (Q > 0) {
+  const brotli = promisify(zlib.brotliCompress), gzip = promisify(zlib.gzip);
+  const t0 = Date.now();
+  let raw = 0, sent = 0;
+  await Promise.all(SENT.map(async (f) => {
+    const data = fs.readFileSync(path.join(OUT, f));
+    const [br, gz] = await Promise.all([
+      brotli(data, { params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: Q, [zlib.constants.BROTLI_PARAM_LGWIN]: 24,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: data.length } }),
+      gzip(data, { level: 9 }),
+    ]);
+    fs.writeFileSync(path.join(OUT, f + '.br'), br);
+    fs.writeFileSync(path.join(OUT, f + '.gz'), gz);
+    raw += data.length; sent += br.length;
+  }));
+  console.log(`compression : ${(raw / 1048576).toFixed(1)} Mo -> ${(sent / 1048576).toFixed(1)} Mo à télécharger (Brotli ${Q}, ${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+}
