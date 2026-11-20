@@ -1090,7 +1090,7 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
     return 1;
 }
 
-void psx_check_interrupts(CPUState* cpu) {
+static void psx_check_interrupts_full(CPUState* cpu) {
     psx_cyc_batch_flush();
     extern int g_ls_suppress_record;
     extern int psx_netplay_active(void);
@@ -2160,6 +2160,47 @@ irq_deliver_eval:
 #undef PSX_CHECK_INTERRUPTS_RETURN
 }
 
+/* The block edge with nothing to deliver, which is nearly every one of them:
+ * no unmasked interrupt pending (I_STAT & I_MASK zero, no COP0 software
+ * interrupt), not inside the handler, no deferred thread switch, no netplay,
+ * idle skip off. psx_check_interrupts_full takes exactly these steps in that
+ * case (its "fast none" return) and nothing else; they are repeated here
+ * because that function calls setjmp, which makes the compiler keep its
+ * variables in memory (the WebAssembly build spent a twentieth of the
+ * emulation thread in it).
+ * Returns 0, having only published the deferred cycles, when any condition
+ * fails: the full function then runs as before from its first line. */
+static inline int check_interrupts_nothing_due(CPUState* cpu) {
+    extern int g_ls_suppress_record;
+    extern int psx_netplay_active(void);
+    psx_cyc_batch_flush();
+    if (in_exception || s_defer_switch_pending || (i_stat & i_mask) != 0 ||
+        g_idle_skip_enabled != 0 ||
+        (cpu->cop0[COP0_CAUSE] & cpu->cop0[COP0_SR] & 0x0300u) != 0 ||
+        psx_netplay_active())
+        return 0;
+    s_irq_path_entry++;
+    s_irq_path_fast_none++;
+    if ((++s_fast_maintenance & 0x3FFFu) == 0) {
+        extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+        extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
+        extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
+        extern void psx_rewind_poll(CPUState* cpu, uint32_t resume_pc);
+        savestate_poll(cpu, s_compiled_interrupt_resume_pc);
+        psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
+        psx_selfcheck_poll(cpu, s_compiled_interrupt_resume_pc);
+        psx_rewind_poll(cpu, s_compiled_interrupt_resume_pc);
+        debug_server_poll();
+    }
+    if (g_ls_suppress_record > 0) g_ls_suppress_record--;
+    return 1;
+}
+
+void psx_check_interrupts(CPUState* cpu) {
+    if (check_interrupts_nothing_due(cpu)) return;
+    psx_check_interrupts_full(cpu);
+}
+
 /* Compatibility shim: the ape-flavored generated code calls
  * psx_check_interrupts_at(cpu, resume_pc); the mmx6-fw baseline runtime delivers
  * interrupts via psx_check_interrupts (cpu->pc / scratch sentinel). Forwarding
@@ -2168,7 +2209,8 @@ irq_deliver_eval:
 void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
     uint32_t prev = s_compiled_interrupt_resume_pc;
     s_compiled_interrupt_resume_pc = resume_pc;
-    psx_check_interrupts(cpu); /* flushes load-charge batch on entry */
+    if (!check_interrupts_nothing_due(cpu))
+        psx_check_interrupts_full(cpu); /* flushes load-charge batch on entry */
     s_compiled_interrupt_resume_pc = prev;
 }
 
