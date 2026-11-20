@@ -45,6 +45,23 @@ void psx_cpu_oc_notify_boot(void) {
 }
 int      g_psx_cyc_bb_defer = 0;
 uint32_t *g_psx_cyc_local_acc = NULL;
+uint32_t g_psx_cyc_fast_cap = 0;     /* psx_cycles.h: psx_cyc_fast_refresh */
+
+#if !defined(PSX_COSIM) && !defined(PSX_OVERLAY_DLL_BUILD)
+/* The interlock of one non-load instruction as Beetle runs it (psx_cyc.h),
+ * for every instruction the inlined settled test does not take; then the
+ * settled mark is decided again from the fields themselves. */
+void psx_cyc_step_full(CPUState* cpu, uint32_t reg_mask) {
+    psx_cyc_step_full_body(cpu, reg_mask);
+}
+
+/* Timing of a main-RAM CPU load outside the settled case. The load is left
+ * armed on rt, so the interlock is not settled afterwards (psx_cyc_lds has
+ * cleared the mark). */
+void psx_cyc_load_ram_timing(CPUState* cpu, uint32_t rt, uint32_t reg_mask) {
+    psx_cyc_load_ram_exact(cpu, rt, reg_mask);
+}
+#endif
 static int      s_cycle_replay_active = 0;
 static uint64_t s_cycle_replay_live = 0;
 
@@ -91,6 +108,7 @@ int g_event_step_conservative = 0;
 void psx_event_step_conservative_env_init(void) {
     const char *e = getenv("PSX_EVENT_STEP_CONSERVATIVE");
     if (e && e[0] == '1') g_event_step_conservative = 1;
+    psx_cyc_fast_refresh();
 }
 
 static void advance_devices(uint32_t c) {
@@ -233,6 +251,7 @@ void psx_devices_service_to_now(void) {
     if (g_plp_cycle_diag) g_plp_svc_calls++;
     g_psx_cycle_fast_limit = 0;
     s_in_device_service = 1;
+    psx_cyc_fast_refresh();
     uint64_t target = psx_cycle_count;
     if (s_devices_synced_cycle < target) {
         /* Rewind and re-play the gap in event-bounded chunks so device
@@ -289,6 +308,7 @@ void psx_devices_service_to_now(void) {
     }
     psx_devices_recompute_deadline();
     psx_in_device_service = 0;
+    psx_cyc_fast_refresh();
 
     /* Sparse host maintenance (was on every psx_advance_cycles). HARD_CAP
      * guarantees we land here at least every 16K guest cycles. */
@@ -651,6 +671,7 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
     s_devices_synced_cycle = psx_cycle_count;
     psx_next_service_cycle = 0;   /* recompute on next charge */
     psx_in_device_service  = 0;
+    psx_cyc_fast_refresh();
     /* Idle-skip detector latches absolute cycle/store counters from the
      * pre-load timeline; drop them so a rewound clock cannot false-train. */
     s_idle_pc = 0;
@@ -672,6 +693,8 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
         cpu->read_fudge = 0x20u; /* no committed predecessor load */
         cpu->ld_which_t = 0x20u; /* no pending load dest */
         cpu->ld_absorb = 0;
+        cpu->cyc_live = 0;       /* every slot was just zeroed */
+        cpu->cyc_settled = 0;    /* psx_cyc_step_full decides again */
     }
     /* Dirty-RAM interpreter load-delay writebacks live in host statics, not
      * BS_SEC_CPU. Discard (do not flush): snap GPRs are already architectural.
@@ -702,6 +725,7 @@ void psx_cycles_reset_for_boot(void) {
     g_psx_cycle_fast_limit = 0;
     s_next_watchdog        = 0;
     s_next_pc_sample       = 0;
+    psx_cyc_fast_refresh();
 }
 
 /* ---- Mult/div completion-stall timing (faithful R3000A; Beetle muldiv_ts_done) ----
@@ -787,6 +811,7 @@ void psx_gte_read(CPUState* cpu, uint32_t rt) {
         cpu->ld_absorb = 0u;
     }
     cpu->ld_which_t = (uint8_t)rt;
+    cpu->cyc_settled = 0u;   /* a load is armed: not settled */
 }
 
 /* ---- GTE (COP2) per-command completion-stall timing ----

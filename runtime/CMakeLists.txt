@@ -114,6 +114,15 @@ if(BUILD_TESTING)
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME psx_cyc_batch_test COMMAND psx_cyc_batch_test)
 
+    # The settled fast path of the load-delay interlock against the interlock
+    # run as written, over a random program (fields, clock and batch equal
+    # after every operation).
+    add_executable(psx_cyc_settled_test tests/test_psx_cyc_settled.c)
+    target_include_directories(psx_cyc_settled_test PRIVATE include)
+    target_compile_definitions(psx_cyc_settled_test PRIVATE
+        PSX_ENABLE_BLOCK_CYCLES=1)
+    add_test(NAME psx_cyc_settled_test COMMAND psx_cyc_settled_test)
+
     add_executable(psx_icache_fastpath_test
         tests/test_psx_icache_fastpath.c
         src/psx_icache.c

@@ -64,6 +64,20 @@ typedef struct CPUState {
     uint8_t  read_fudge;        /* ReadFudge: last committed load's dest reg, or 0x20 = none */
     uint8_t  ld_which_t;        /* LDWhich (timing): pending load dest reg, 0x20 = none */
     uint32_t ld_absorb;         /* LDAbsorb: pending load's give-back (region+completion) */
+
+    /* Host bookkeeping for the five fields above, not guest state (psx_cyc.h,
+     * "Settled interlock"). Appended at END so prior field offsets are
+     * unchanged.
+     * cyc_live: the ReadAbsorb slots that may hold a give-back (bit n: slot
+     *   n), always a superset of the non-zero ones. psx_cyc_lds, the only
+     *   place a slot receives a value, sets the bit; psx_cyc_step_full drops
+     *   the bits of slots it finds zero.
+     * cyc_settled: 1 while the interlock is known to be settled: every slot
+     *   zero, the last DO_LDS committed no load and left the dummy slot equal
+     *   to LDAbsorb. psx_cyc_lds and every other runtime writer of the five
+     *   fields clears it; only psx_cyc_step_full sets it. */
+    uint32_t cyc_live;
+    uint8_t  cyc_settled;
 } CPUState;
 
 /* Overlay DLLs batch per-instruction cycle charges in a DLL-local accumulator.

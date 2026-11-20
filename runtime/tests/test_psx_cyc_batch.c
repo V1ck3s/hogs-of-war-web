@@ -7,6 +7,7 @@ uint64_t psx_cycle_count = 0;
 uint64_t psx_next_service_cycle = 0;
 uint32_t g_psx_cyc_batch = 0;
 uint32_t g_psx_cyc_batch_limit = 0;
+uint32_t g_psx_cyc_fast_cap = 0;
 uint32_t g_psx_cpu_oc_q16 = 0;
 uint32_t g_psx_cpu_oc_frac = 0;
 int g_psx_cyc_bb_defer = 0;

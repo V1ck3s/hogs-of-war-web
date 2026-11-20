@@ -823,6 +823,7 @@ void psx_scheduler_run(CPUState* cpu)
              * psx_devices_service_to_now; without this the re-entrancy guard
              * stays set and every later advance skips device service forever. */
             { extern int psx_in_device_service; psx_in_device_service = 0; }
+            psx_cyc_fast_refresh();
             /* A longjmp-out through a nested call unit (overlay_loader_call_native
              * or dispatch_nonlocal_call) would skip its depth restore; clear the
              * nested-unit gate so IRQ checks are not wedged-off after the escape
@@ -837,6 +838,7 @@ void psx_scheduler_run(CPUState* cpu)
                 g_psx_cyc_local_acc = NULL;
                 g_psx_cyc_bb_defer = 0;
                 g_psx_cyc_batch = 0;
+                psx_cyc_fast_refresh();
             }
         }
 

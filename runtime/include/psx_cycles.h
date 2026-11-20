@@ -66,6 +66,31 @@ extern int g_psx_cyc_bb_defer;
  * via psx_cyc_local_publish / psx_cyc_batch_flush before IRQ/MMIO barriers. */
 extern uint32_t *g_psx_cyc_local_acc;
 
+/* Deferred-batch gate for the settled fast path (psx_cyc.h, "Settled
+ * interlock"). Non-zero exactly while psx_cyc_charge(n) is the plain
+ * "g_psx_cyc_batch += n" of its basic-block-deferred branch: inside generated
+ * code (g_psx_cyc_bb_defer > 0) with no replay clock, no conservative
+ * stepping, no device service in progress and no function-local accumulator.
+ * Its value is the batch size below which that addition cannot wrap. Every
+ * writer of those five variables calls psx_cyc_fast_refresh() right after
+ * the write, so the gate never outlives the mode it stands for; a zero gate
+ * only sends the charge through psx_cyc_charge, which is always right. */
+#define PSX_CYC_FAST_CAP 0xFFFFFF00u
+#if defined(PSX_OVERLAY_DLL_BUILD)
+static inline void psx_cyc_fast_refresh(void) { }
+#else
+extern uint32_t g_psx_cyc_fast_cap;
+static inline void psx_cyc_fast_refresh(void) {
+#if defined(PSX_COSIM)
+    g_psx_cyc_fast_cap = 0u;             /* cosim charges are never batched */
+#else
+    g_psx_cyc_fast_cap =
+        (g_psx_cyc_bb_defer > 0 && !(g_ls_replay_active | g_event_step_conservative) &&
+         !psx_in_device_service && !g_psx_cyc_local_acc) ? PSX_CYC_FAST_CAP : 0u;
+#endif
+}
+#endif
+
 /* CPU overclock (enhancement tier, opt-in; DuckStation's "CPU overclock").
  * CPU-side charges -- instruction base cost, memory waits, I-cache refills --
  * reach the shared device timeline multiplied by g_psx_cpu_oc_q16 / 65536, so
@@ -210,8 +235,10 @@ static inline void psx_cyc_local_publish(void) {
     if (!v) return;
     *acc = 0;
     g_psx_cyc_local_acc = NULL;
+    psx_cyc_fast_refresh();
     psx_advance_cycles(v);
     g_psx_cyc_local_acc = acc;
+    psx_cyc_fast_refresh();
 #endif
 }
 

@@ -2116,6 +2116,9 @@ static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
     /* ReadMemory start (369-370): clear the current give-back slot. */
     cpu->read_absorb[cpu->read_absorb_which] = 0u;
     cpu->read_absorb_which = 0u;
+    /* LDAbsorb/LDWhich change below (LWC2 comes here straight after its
+     * psx_cyc_step): psx_cyc_step_full decides "settled" again. */
+    cpu->cyc_settled = 0u;
     /* Scratchpad (the D-cache): no wait, no give-back (414-422). */
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         cpu->ld_absorb = 0u;

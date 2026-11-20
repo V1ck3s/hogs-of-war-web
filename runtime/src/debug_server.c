@@ -12556,6 +12556,7 @@ static void handle_overlay_native_event_granularity(int id, const char *json)
     }
     int conservative = (strcmp(mode, "conservative") == 0);
     g_event_step_conservative = conservative;
+    psx_cyc_fast_refresh();
     send_fmt("{\"id\":%d,\"ok\":true,\"event_granularity\":\"%s\"}\n",
              id, conservative ? "conservative" : "normal");
 }

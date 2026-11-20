@@ -2102,6 +2102,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
+            cpu->cyc_settled = 0u;
 #endif
             cpu->gpr[rt] = cpu->cop0[rd];
             cpu->gpr[0] = 0;
@@ -2111,6 +2112,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
+            cpu->cyc_settled = 0u;
 #endif
             cpu->gpr[rt] = cpu->cop0[rd];
             cpu->gpr[0] = 0;
@@ -3542,6 +3544,7 @@ int ls_shadow_replay_begin(void) {
     s_ls_replay_done = 0;
     s_ls_shadow_owner = 2;
     g_ls_replay_active = 1;
+    psx_cyc_fast_refresh();
     g_ls_mode = 2;
     return 1;
 }
@@ -3554,6 +3557,7 @@ int ls_shadow_replay_end(uint32_t *ops, int *mismatch_kind,
                    s_ls_trace_idx == s_ls_trace_n;
     g_ls_mode = 0;
     g_ls_replay_active = 0;
+    psx_cyc_fast_refresh();
     s_ls_shadow_owner = 0;
     if (ops) *ops = (uint32_t)s_ls_trace_idx;
     if (mismatch_kind) *mismatch_kind = s_ls_m_kind;
@@ -3567,6 +3571,7 @@ int ls_shadow_replay_end(uint32_t *ops, int *mismatch_kind,
 void ls_shadow_abort(void) {
     g_ls_mode = 0;
     g_ls_replay_active = 0;
+    psx_cyc_fast_refresh();
     s_ls_shadow_owner = 0;
     s_ls_shadow_saw_exception = 0;
 }
@@ -3646,6 +3651,7 @@ static void ls_replay_and_compare(CPUState *cpu, uint32_t frame, uint32_t target
     uint32_t    sav_unsup_insn   = g_unsupported_insn;
     const char *sav_unsup_reason = g_unsupported_reason;
     g_ls_replay_active = 1;
+    psx_cyc_fast_refresh();
     g_ls_mode = 2;
     uint32_t pc = rep.pc;
     int cap = 512, steps = 0;
@@ -3668,6 +3674,7 @@ static void ls_replay_and_compare(CPUState *cpu, uint32_t frame, uint32_t target
     }
     g_ls_mode = 0;
     g_ls_replay_active = 0;
+    psx_cyc_fast_refresh();
     g_unsupported_seen   = sav_unsup_seen;     /* undo any replay-side decode-state leak */
     g_unsupported_pc     = sav_unsup_pc;
     g_unsupported_insn   = sav_unsup_insn;
@@ -3764,6 +3771,7 @@ static void lsf_replay_and_compare(CPUState *native_post, uint32_t frame,
     uint32_t    sav_func_addr    = g_debug_current_func_addr;
 
     g_ls_replay_active = 1;
+    psx_cyc_fast_refresh();
     g_ls_mode = 2;
 
     uint32_t pc = entry_pc;
@@ -3797,6 +3805,7 @@ static void lsf_replay_and_compare(CPUState *native_post, uint32_t frame,
 
     g_ls_mode = 0;
     g_ls_replay_active = 0;
+    psx_cyc_fast_refresh();
     g_unsupported_seen   = sav_unsup_seen;
     g_unsupported_pc     = sav_unsup_pc;
     g_unsupported_insn   = sav_unsup_insn;

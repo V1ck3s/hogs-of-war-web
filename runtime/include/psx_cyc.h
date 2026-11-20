@@ -54,10 +54,14 @@ static inline void psx_cyc_bb_defer_flush(void) { overlay_flush_cycles(); }
 static inline void psx_cyc_local_begin(uint32_t *acc) { (void)acc; }
 static inline void psx_cyc_local_end(void) { }
 #else
-static inline void psx_cyc_bb_defer_begin(void) { g_psx_cyc_bb_defer++; }
+static inline void psx_cyc_bb_defer_begin(void) {
+    g_psx_cyc_bb_defer++;
+    psx_cyc_fast_refresh();
+}
 static inline void psx_cyc_bb_defer_end(void) {
     if (g_psx_cyc_bb_defer > 0) g_psx_cyc_bb_defer--;
     if (g_psx_cyc_bb_defer == 0) psx_cyc_batch_flush();
+    psx_cyc_fast_refresh();
 }
 static inline void psx_cyc_bb_defer_flush(void) { psx_cyc_batch_flush(); }
 
@@ -67,6 +71,7 @@ static inline void psx_cyc_local_begin(uint32_t *acc) {
 #if !defined(PSX_COSIM)
     if (acc) *acc = 0;
     g_psx_cyc_local_acc = acc;
+    psx_cyc_fast_refresh();
 #else
     (void)acc;
 #endif
@@ -75,6 +80,7 @@ static inline void psx_cyc_local_end(void) {
 #if !defined(PSX_COSIM)
     psx_cyc_local_publish();
     g_psx_cyc_local_acc = NULL;
+    psx_cyc_fast_refresh();
 #endif
 }
 #endif
@@ -95,6 +101,18 @@ static inline void psx_cyc_charge(uint32_t cycles) {
 #if defined(PSX_OVERLAY_DLL_BUILD)
     psx_advance_cycles(cycles);
 #else
+#if !defined(PSX_COSIM)
+    /* The deferred-batch addition, taken at once when that is what every
+     * test below comes to (g_psx_cyc_fast_cap, psx_cycles.h; the cap leaves
+     * room for 255 cycles, so the sum cannot wrap). */
+    {
+        const uint32_t b = g_psx_cyc_batch;
+        if (cycles <= 0xFFu && b < g_psx_cyc_fast_cap) {
+            g_psx_cyc_batch = b + cycles;
+            return;
+        }
+    }
+#endif
 #if defined(__GNUC__) || defined(__clang__)
     if (__builtin_expect(g_ls_replay_active | g_event_step_conservative, 0)) {
 #else
@@ -196,17 +214,129 @@ static inline void psx_cyc_lds(CPUState* cpu) {
     cpu->read_fudge         = lw;
     cpu->read_absorb_which  = (uint8_t)(cpu->read_absorb_which | (lw & 0x1Fu));
     cpu->ld_which_t         = 0x20u;
+    /* Host bookkeeping (cpu_state.h): slot lw may now hold a give-back (the
+     * dummy slot 0x20 has no bit), and psx_cyc_step_full decides again
+     * whether the interlock is settled. */
+    cpu->cyc_live          |= (uint32_t)(1ull << lw);
+    cpu->cyc_settled        = 0u;
 }
 
 /* Full per-instruction interlock for a NON-CPU-load instruction (ALU, shift,
  * branch, jump, store, COP control, LWC2/SWC2 pre-step, mult/div, mfhi/mflo, ...).
  * reg_mask from psx_cyc_dep_res_mask(). MUST be emitted BEFORE the instruction
  * body so §1 precedes any muldiv/GTE deadline stall in the body (Beetle order). */
-static inline void psx_cyc_step(CPUState* cpu, uint32_t reg_mask) {
+static inline void psx_cyc_step_exact(CPUState* cpu, uint32_t reg_mask) {
     psx_cyc_base(cpu);
     psx_cyc_deps(cpu, reg_mask);
     psx_cyc_lds(cpu);
 }
+
+/* ---- Settled interlock ---------------------------------------------------
+ * Most instructions run with nothing to give back and nothing pending. Call
+ * the interlock SETTLED when
+ *     ReadAbsorb[0..31] are all zero,
+ *     LDWhich == 0x20                  (no load waiting for its DO_LDS),
+ *     ReadFudge == 0x20                (the last DO_LDS committed no load),
+ *     ReadAbsorb[32] == (uint8_t)LDAbsorb (what that DO_LDS left in the dummy slot).
+ * In that state the three steps above come to "+1 cycle" and write no field
+ * with a new value: section 1 finds ReadAbsorb[ReadAbsorbWhich] zero and
+ * charges 1, GPR_DEPRES zeroes slots that are zero, DO_LDS with LDWhich 0x20
+ * rewrites the dummy slot, ReadFudge and LDWhich with what they hold and ORs
+ * zero into ReadAbsorbWhich. So a settled interlock stays settled across any
+ * number of non-load instructions.
+ *
+ * CPUState.cyc_settled records that the first, third and fourth conditions
+ * held when psx_cyc_step_full last looked; psx_cyc_lds, psx_cyc_readmem and
+ * every other runtime writer of the five fields clear it. Generated code has
+ * one writer of its own, the MFC0/CFC0 sequence "ld_absorb = 0; ld_which_t =
+ * rt", which leaves the mark alone but always sets LDWhich to a register, so
+ * the test below reads LDWhich too. With the mark set and LDWhich 0x20 the
+ * interlock is settled, and when the charge is the deferred-batch addition
+ * (g_psx_cyc_fast_cap, psx_cycles.h) the whole step is one increment. Every
+ * other case runs the three steps as written, out of line; the clock, the
+ * batch and the five fields are the same either way at every instruction. */
+#if !defined(PSX_OVERLAY_DLL_BUILD) && !defined(PSX_COSIM)
+void psx_cyc_step_full(CPUState* cpu, uint32_t reg_mask);
+void psx_cyc_load_ram_timing(CPUState* cpu, uint32_t rt, uint32_t reg_mask);
+/* PSX_CYC_WRITTEN_OUT (a per-source compile definition): no settled test,
+ * the interlock is written out at every instruction as psx_cyc_step_exact /
+ * psx_cyc_load_ram_exact (which keep the mark and cyc_live right, through
+ * psx_cyc_lds). For generated files made of enormous functions that seldom
+ * run: the optimizer folds consecutive instructions' field updates of the
+ * written-out form in seconds, where the test with its out-of-line call took
+ * it tens of minutes and over a gigabyte per file (one function of 300,000
+ * lines in Cochons de Guerre's main executable, which is 1 % of the run
+ * time) and produced several times more code. */
+
+/* 1 when the interlock is settled: the four conditions, read from the fields
+ * (the definition; tests check the mark against it). */
+static inline int psx_cyc_settled_now(const CPUState* cpu) {
+    uint64_t a0, a1, a2, a3;
+    if (cpu->read_fudge != 0x20u || cpu->ld_which_t != 0x20u ||
+        cpu->read_absorb[32] != (uint8_t)cpu->ld_absorb)
+        return 0;
+    memcpy(&a0, cpu->read_absorb + 0, 8);
+    memcpy(&a1, cpu->read_absorb + 8, 8);
+    memcpy(&a2, cpu->read_absorb + 16, 8);
+    memcpy(&a3, cpu->read_absorb + 24, 8);
+    return (a0 | a1 | a2 | a3) == 0u;
+}
+
+/* 1 when no ReadAbsorb slot holds a give-back. Only the slots psx_cyc_lds
+ * has written since they were last seen zero can (cyc_live), so this looks
+ * at those, normally one, instead of reading the whole array back right
+ * after single bytes of it were stored. */
+static inline int psx_cyc_absorb_none(CPUState* cpu) {
+    uint32_t live = cpu->cyc_live;
+    while (live) {
+#if defined(_MSC_VER)
+        unsigned long idx;
+        _BitScanForward(&idx, live);
+        const unsigned n = (unsigned)idx;
+#else
+        const unsigned n = (unsigned)__builtin_ctz(live);
+#endif
+        if (cpu->read_absorb[n]) break;
+        live &= live - 1u;
+    }
+    cpu->cyc_live = live;
+    return live == 0u;
+}
+
+/* The body of psx_cyc_step_full (psx_cycles.c): the interlock as written,
+ * then the settled mark decided again. DO_LDS with LDWhich 0x20 has just set
+ * ReadFudge and LDWhich to 0x20 and the dummy slot to LDAbsorb, so with that
+ * LDWhich three of the four conditions hold and the slots decide. */
+static inline void psx_cyc_step_full_body(CPUState* cpu, uint32_t reg_mask) {
+    psx_cyc_base(cpu);
+    psx_cyc_deps(cpu, reg_mask);
+    const uint8_t lw = cpu->ld_which_t;   /* what DO_LDS commits */
+    psx_cyc_lds(cpu);
+    cpu->cyc_settled = (uint8_t)(lw == 0x20u && psx_cyc_absorb_none(cpu));
+}
+
+static inline void psx_cyc_step_fast(CPUState* cpu, uint32_t reg_mask) {
+    if (cpu->cyc_settled && cpu->ld_which_t == 0x20u) {
+        uint32_t b = g_psx_cyc_batch;
+        if (b < g_psx_cyc_fast_cap) {
+            g_psx_cyc_batch = b + 1u;
+            return;
+        }
+    }
+    psx_cyc_step_full(cpu, reg_mask);
+}
+static inline void psx_cyc_step(CPUState* cpu, uint32_t reg_mask) {
+#if defined(PSX_CYC_WRITTEN_OUT)
+    psx_cyc_step_exact(cpu, reg_mask);
+#else
+    psx_cyc_step_fast(cpu, reg_mask);
+#endif
+}
+#else
+static inline void psx_cyc_step(CPUState* cpu, uint32_t reg_mask) {
+    psx_cyc_step_exact(cpu, reg_mask);
+}
+#endif
 
 /* The GPR dep+res bitmask used by psx_cyc_step lives in psx_instr_cost.h
  * (psx_cyc_dep_res_mask) — a standalone pure function shared by the emitters
@@ -231,26 +361,61 @@ uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
 uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
                            uint32_t rt, uint32_t reg_mask);
 #else
-/* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;
- * MMIO / lockstep / data-shard fall through to *_slow in memory.c. */
+/* Timing of a CPU load from main RAM (section 1, GPR_DEPRES, cancel of a
+ * pending load to the same register, DO_LDS, then ReadMemory: wait 3 +
+ * completion 2, +2 fudge when the predecessor committed no load). */
+static inline void psx_cyc_load_ram_exact(CPUState* cpu, uint32_t rt, uint32_t reg_mask) {
+    psx_cyc_base(cpu);
+    psx_cyc_deps(cpu, reg_mask);
+    if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;
+    psx_cyc_lds(cpu);
+    cpu->read_absorb[cpu->read_absorb_which] = 0u;
+    cpu->read_absorb_which = 0u;
+    uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
+    cpu->ld_absorb = 5u; /* main-RAM wait 3 + completion 2 */
+    psx_cyc_charge(fudge + 5u);
+    cpu->ld_which_t = (uint8_t)rt;
+}
+/* Settled (see "Settled interlock"): section 1 charges 1, GPR_DEPRES and
+ * DO_LDS change nothing, no load is pending so none is cancelled, ReadFudge
+ * is 0x20 so the fudge is 2: 1 + 2 + 5 cycles, ReadAbsorbWhich cleared, the
+ * load armed on rt. A load never leaves the interlock settled. */
+#if !defined(PSX_COSIM)
+static inline void psx_cyc_load_ram_fast(CPUState* cpu, uint32_t rt, uint32_t reg_mask) {
+    if (cpu->cyc_settled && cpu->ld_which_t == 0x20u) {
+        uint32_t b = g_psx_cyc_batch;
+        if (b < g_psx_cyc_fast_cap) {
+            g_psx_cyc_batch = b + 8u;
+            cpu->read_absorb_which = 0u;
+            cpu->ld_absorb = 5u;
+            cpu->ld_which_t = (uint8_t)rt;
+            cpu->cyc_settled = 0u;
+            return;
+        }
+    }
+    psx_cyc_load_ram_timing(cpu, rt, reg_mask);
+}
+#endif
+static inline void psx_cyc_load_ram(CPUState* cpu, uint32_t rt, uint32_t reg_mask) {
+#if defined(PSX_COSIM)
+    psx_cyc_load_ram_exact(cpu, rt, reg_mask);
+#elif defined(PSX_CYC_WRITTEN_OUT)
+    psx_cyc_load_ram_exact(cpu, rt, reg_mask);
+#else
+    psx_cyc_load_ram_fast(cpu, rt, reg_mask);
+#endif
+}
+
+/* CPU data load value+timing. The settled main-RAM case is inlined; the full
+ * Beetle sequence runs out of line (psx_cyc_load_ram_timing), and MMIO /
+ * lockstep / data-shard fall through to *_slow in memory.c. */
 static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     uint32_t phys = addr & 0x1FFFFFFFu;
     if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
-        if (g_psx_load_delay) {
-            psx_cyc_base(cpu);
-            psx_cyc_deps(cpu, reg_mask);
-            if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;
-            psx_cyc_lds(cpu);
-            cpu->read_absorb[cpu->read_absorb_which] = 0u;
-            cpu->read_absorb_which = 0u;
-            uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
-            cpu->ld_absorb = 5u; /* main-RAM wait 3 + completion 2 */
-            psx_cyc_charge(fudge + 5u);
-            cpu->ld_which_t = (uint8_t)rt;
-        }
+        if (g_psx_load_delay) psx_cyc_load_ram(cpu, rt, reg_mask);
         uint32_t value;
         memcpy(&value, g_psx_ram + (phys & g_psx_ram_mask), sizeof(value));
         return value;
@@ -269,18 +434,7 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
     uint32_t phys = addr & 0x1FFFFFFFu;
     if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
-        if (g_psx_load_delay) {
-            psx_cyc_base(cpu);
-            psx_cyc_deps(cpu, reg_mask);
-            if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;
-            psx_cyc_lds(cpu);
-            cpu->read_absorb[cpu->read_absorb_which] = 0u;
-            cpu->read_absorb_which = 0u;
-            uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
-            cpu->ld_absorb = 5u;
-            psx_cyc_charge(fudge + 5u);
-            cpu->ld_which_t = (uint8_t)rt;
-        }
+        if (g_psx_load_delay) psx_cyc_load_ram(cpu, rt, reg_mask);
         uint16_t value;
         memcpy(&value, g_psx_ram + (phys & g_psx_ram_mask), sizeof(value));
         return value;

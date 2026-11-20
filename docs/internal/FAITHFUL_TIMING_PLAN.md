@@ -213,6 +213,69 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-11-20, later (web-runtime branch: host cost of the per-instruction interlock):**
+  A native profile of the same recorded battle, after the two fixes below,
+  put 28 % of the CPU in the `psx_cyc_*` helpers and 4 % in
+  `psx_icache_fetch`, against 7.5 % in the generated game code: every
+  instruction ran section 1, GPR_DEPRES and DO_LDS field by field, and every
+  fetch line called the I-cache model.
+  Changes, none of which moves a cycle:
+  1. **Settled interlock** (`psx_cyc.h`). When every ReadAbsorb slot is zero,
+     LDWhich and ReadFudge are 0x20 and the dummy slot equals LDAbsorb, the
+     three steps of a non-load instruction come to "+1 cycle" and rewrite the
+     fields with what they hold, and a main-RAM load comes to "+8 cycles,
+     ReadAbsorbWhich = 0, LDAbsorb = 5, LDWhich = rt". `CPUState.cyc_settled`
+     marks that state: set only by `psx_cyc_step_full` (the interlock as
+     written, out of line, then the mark decided from the fields), cleared by
+     `psx_cyc_lds`, `psx_cyc_readmem`, `psx_gte_read`, the interpreter's
+     MFC0/CFC0 and a restore. The inlined test also reads LDWhich, because
+     generated MFC0/CFC0 code writes `ld_absorb`/`ld_which_t` itself (found
+     while auditing the writers). `CPUState.cyc_live` lists the slots that may
+     hold a give-back, so deciding the mark reads one slot instead of the
+     array. The charge is taken inline only while `psx_cyc_charge` would do
+     the plain deferred-batch addition (`g_psx_cyc_fast_cap`, refreshed by
+     every writer of the five mode variables), so the published clock and the
+     batch evolve exactly as before. That is required, not cosmetic:
+     `psx_muldiv_set` / `psx_muldiv_stall` read the published clock without
+     flushing the batch (unlike the GTE pair, which flushes), so mult/div
+     stalls depend on where the batch is published. That is left as it is and
+     recorded here as an open accuracy item (ACCURACY_BURNDOWN cycle axis).
+     Overlay ABI 25: a DLL built before would not clear the mark.
+     `PSX_CYC_WRITTEN_OUT` (a per-source compile definition) keeps the
+     interlock written out, with no settled test, for generated files made of
+     enormous seldom-run functions. Measured while building for the browser:
+     with the test and its out-of-line call at every instruction, one file of
+     Cochons de Guerre's main executable (a single function of 300,000 lines)
+     took the optimizer 9 minutes instead of 4 seconds and another had not
+     finished after 35 minutes at 1.2 GB; written out, the optimizer folds
+     consecutive instructions' field updates and produces less code. That
+     main executable is 1.3 % of the run time, so the game compiles it
+     written out and the modules it loads with the test.
+  2. The **I-cache tag hit** is tested inline at the fetch site; a miss calls
+     `psx_icache_fetch_miss` as before (a hit changed nothing in any mode).
+  3. `psx_check_interrupts`: the block edge with nothing to deliver is
+     answered by a small function with the same bookkeeping; the full one
+     (which calls setjmp) runs unchanged, from its first line, whenever
+     anything is pending or any special mode is on.
+  4. Timed scratchpad loads read the scratchpad directly after their timing
+     (same bytes; KSEG2, lockstep hooks and capture keep the full path).
+  Evidence: `runtime/tests/test_psx_cyc_settled.c` -- 4,000,000 random
+  operations (instructions, loads, MFC0/MFC2/LWC2/scratchpad sequences,
+  I-cache misses, mult/div stalls, flushes, every mode that closes the batch
+  gate, one run in five through the written-out form as a build mixes them):
+  the five fields, the clock, the batch and the service count are equal
+  after every operation between the fast path and the interlock as written.
+  In the game, the four items together: the 13,200-frame recorded battle
+  replayed natively gives the 22 RAM digests of the recording for 148.5 s of
+  CPU instead of 167.2 s; in the browser (WebAssembly) the same recording
+  gives 22/22 and a recorded two-player session 11/11. NOT checked against
+  the Beetle oracle (the change has no timing content; the test above is the
+  argument), and no other title was run. Two test harnesses that no longer
+  linked were repaired on the way (`test_psx_cyc_batch.c` lacked the
+  overclock globals; `test_gte_deferred.c` and
+  `test_psx_cycle_event_boundaries.c` lacked the two DMA list functions
+  added by the entry below).
+
 - **2026-11-20 (web-runtime branch: device-service cost of GPU list DMA):**
   Profiling a recorded Cochons de Guerre battle in WebAssembly put a fifth of
   the emulation thread in the device scheduler. Cause: a GPU linked-list

@@ -108,7 +108,11 @@
 /* v23: native overlay forwarding for signed screen bounds and mod entry hooks. */
 /* v24: mod_function_entry_replace forwarder, so a mod hook can take over a
  *      call into overlay-resident code. */
-#define PSX_OVERLAY_ABI_VERSION 24
+/* v25: CPUState gained cyc_live / cyc_settled, the host's bookkeeping for
+ *      the settled load-delay interlock (psx_cyc.h). psx_cyc_lds, inlined in
+ *      every overlay DLL, maintains them; a DLL built before would run its
+ *      instructions without clearing the host's "settled" mark. */
+#define PSX_OVERLAY_ABI_VERSION 25
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
