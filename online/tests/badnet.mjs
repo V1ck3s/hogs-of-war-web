@@ -1,9 +1,17 @@
 // Bad connection: Bruno's link is slowed by the server (CDG_SLOW, default
 // 300 ms + up to 300 ms each way: a 0.6-1.2 s round trip, jittery). In
 // battle, measures how long each player's game waits for the network during
-// their own turn (owner-only lockstep: should be ~0 whatever Bruno's link),
-// how far the other one watches behind, and that the copies stay identical.
-//   node tests/badnet.mjs <outdir>
+// their own turn, how far the other one watches behind, and that the copies
+// stay identical.
+//
+// Owner-only lockstep: the player in control never waits for their own
+// inputs, whatever the other's link. They are held only at the drift bound,
+// when the watcher falls 60 frames behind. That bound is in frames: the
+// faster the game runs, the less time it leaves. Two games on one test
+// machine cannot both hold the pace, so the watcher sits near the bound and
+// the owner is held for a few percent of the turn; a game that waited for
+// the other player's inputs at every frame would be held for most of it.
+//   node tests/badnet.mjs <outdir>     env GPU=0, PLAYOUT=0, RASTER_THREAD=0|1
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +39,7 @@ async function browser(name, q, aspect) {
   await page.setViewport({ width: 1100, height: 620 });
   page.on('console', (m) => { const t = m.text(); if (/désynchro|error|snapshot|savestate: (LOAD|SAVE)|\[partie\]|\[lockstep\]/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.PLAYOUT === '0' ? '&playout=0' : ''}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.PLAYOUT === '0' ? '&playout=0' : ''}${process.env.RASTER_THREAD ? '&rasterthread=' + process.env.RASTER_THREAD : ''}${roomCode ? '&salon=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
   await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
@@ -128,24 +136,47 @@ async function measureTurn(team, who, other) {
   await sleep(1500);
   const w0 = await waitOf(who.page), f0 = (await info(who.page)).frame, t0 = Date.now();
   const e0 = await evenOf(other.page);
-  let behind = 0;
+  // The walk is blind and lasts 12 s of real time: the pig may end its turn
+  // on the way (water, a mine). From then on the other player is in control
+  // and waiting for their words is what the game must do: only the wait
+  // while `who` still has the turn counts.
+  let behind = 0, wait = 0, wPrev = w0, ended = 0;
+  // Whom the owner's game was waiting for, sampled twice a second: itself
+  // (its own words late: the page's lockstep worker starved) or the other
+  // player (the drift bound: the watcher is 60 frames behind).
+  const waitedFor = [0, 0], me = who === host ? 0 : 1;
+  const waitingOf = (p) => p.evaluate(() => (window.__cdg.state.lastStats || {}).waiting || []);
   for (const k of ['ArrowUp', 'ArrowLeft', 'ArrowUp', 'ArrowRight']) {
-    await who.page.keyboard.down(k); await sleep(3000); await who.page.keyboard.up(k);
-    const [x, y] = await Promise.all([info(who.page), info(other.page)]);
+    await who.page.keyboard.down(k);
+    for (let i = 0; i < 6; i++) {
+      await sleep(500);
+      for (const p of await waitingOf(who.page)) waitedFor[p === me ? 0 : 1]++;
+    }
+    await who.page.keyboard.up(k);
+    const [x, y, w] = await Promise.all([info(who.page), info(other.page), waitOf(who.page)]);
     behind = Math.max(behind, x.frame - y.frame);
+    const mine = (x.team & 0xff) === team && !(x.team & 0x100);
+    if (mine && !ended) wait += w - wPrev;
+    else if (!ended) ended = (Date.now() - t0) / 1000;
+    wPrev = w;
   }
   const w1 = await waitOf(who.page), f1 = (await info(who.page)).frame, secs = (Date.now() - t0) / 1000;
   const e1 = await evenOf(other.page);
   const late = e1.late - e0.late, hitch = e1.hitch - e0.hitch, n = e1.n - e0.n;
-  console.log(`      tour de ${who.name} : ${f1 - f0} images en ${secs.toFixed(1)} s, attente réseau ${w1 - w0} ms ; ${other.name} regarde jusqu’à ${behind} images derrière, ` +
+  console.log(`      tour de ${who.name} : ${f1 - f0} images en ${secs.toFixed(1)} s, attente réseau ${wait} ms pendant son tour` +
+    (ended ? ` (tour terminé avant ${ended.toFixed(0)} s ; ${w1 - w0} ms sur toute la mesure)` : '') +
+    ` [vu en attente : ${waitedFor[0]} fois de ses propres entrées, ${waitedFor[1]} fois de ${other.name}, sur 24 relevés]` +
+    ` ; ${other.name} regarde jusqu’à ${behind} images derrière, ` +
     `${late} image(s) en retard et ${hitch} à-coup(s) sur ${n} (tampon ${e1.play.low}/${e1.play.level}, à sec ${e1.play.dry - e0.play.dry} fois)`);
-  return { wait: w1 - w0, frames: f1 - f0, secs, late, hitch, n };
+  return { wait, frames: f1 - f0, secs, late, hitch, n, own: waitedFor[0] };
 }
 const total0 = await Promise.all([host, guest].map((x) => waitOf(x.page)));
 const ta = await measureTurn(1, host, guest);
-check(ta.wait < 500, `pendant son tour, Alice attend le réseau ${ta.wait} ms (Bruno a une mauvaise connexion)`);
+// Held at the drift bound at most: under 15 % of the turn, never for their own inputs.
+const held = (t) => t.wait < t.secs * 150 && t.own === 0;
+check(held(ta), `pendant son tour, Alice n’attend jamais ses propres entrées et le réseau ${ta.wait} ms sur ${ta.secs.toFixed(0)} s (Bruno a une mauvaise connexion)`);
 const tb = await measureTurn(2, guest, host);
-check(tb.wait < 500, `pendant son tour, Bruno attend le réseau ${tb.wait} ms malgré sa connexion`);
+check(held(tb), `pendant son tour, Bruno n’attend jamais ses propres entrées et le réseau ${tb.wait} ms sur ${tb.secs.toFixed(0)} s malgré sa connexion`);
 // Back to Alice: the turn change waits for Bruno at most the drift bound.
 const tc = await measureTurn(1, host, guest);
 const total1 = await Promise.all([host, guest].map((x) => waitOf(x.page)));

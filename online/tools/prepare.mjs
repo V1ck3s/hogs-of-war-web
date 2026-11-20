@@ -11,6 +11,9 @@
 //                                      and the server compresses on the fly)
 //
 //   node tools/prepare.mjs [--build ../cochons/build-web] [--disc ../cochons/disc]
+//                          [--out game]   (another folder: a build to try
+//                                          with CDG_GAME=<folder> before it
+//                                          replaces the one being served)
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -26,7 +29,7 @@ const arg = (name, def) => {
 };
 const BUILD = arg('--build', path.resolve(ROOT, '../cochons/build-web'));
 const DISC = arg('--disc', path.resolve(ROOT, '../cochons/disc'));
-const OUT = path.join(ROOT, 'game');
+const OUT = arg('--out', path.join(ROOT, 'game'));
 // Streamed chunk size (CDG_CHUNK_KB, default 256).
 export const CHUNK = (+(process.env.CDG_CHUNK_KB || 256) | 0) * 1024;
 
@@ -115,7 +118,7 @@ const version = crypto.createHash('sha256')
 fs.writeFileSync(path.join(OUT, 'files.bin'), bin);
 fs.writeFileSync(path.join(OUT, 'files.json'), JSON.stringify({ version, files }, null, 1));
 fs.writeFileSync(path.join(OUT, 'disc.json'), JSON.stringify({ ...disc, dir: DISC }, null, 1));
-console.log(`game/ prêt : version ${version}, ${files.length} fichiers (${(bin.length / 1024).toFixed(0)} Ko), ` +
+console.log(`${path.relative(ROOT, OUT) || '.'}/ prêt : version ${version}, ${files.length} fichiers (${(bin.length / 1024).toFixed(0)} Ko), ` +
   `${disc.tracks.length} pistes en streaming (${(disc.tracks.reduce((a, t) => a + t.size, 0) / 1048576).toFixed(0)} Mo)`);
 
 // ---- what the browsers download, compressed once (the server sends these as they are)

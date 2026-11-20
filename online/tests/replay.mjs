@@ -3,6 +3,10 @@
 // 600) or a crash / freeze, then compares the game digests every 600 frames
 // with the recorded ones (same inputs => same game, if the build is the same).
 //   node tests/replay.mjs <name.jsonl> <outdir>     env Q, ASPECT, GPU=0
+// RASTER_THREAD=0|1: the game's 1x rasterizer on the emulation thread or on
+// its own (default: the page's choice). VRAM_DIGEST=1: also writes a digest of
+// the game's VRAM at every digest frame to <outdir>/vram.txt, to compare two
+// runs (they must be equal whatever draws it).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,7 +40,7 @@ const page = await b.newPage();
 await page.setViewport({ width: 1100, height: 620 });
 page.on('console', (m) => { const t = m.text(); if (!/lockstep frame|GL Driver Message/.test(t)) console.log('[page]', t.slice(0, 300)); });
 page.on('pageerror', (e) => console.log('[page error]', e.message));
-await page.goto(`http://127.0.0.1:${PORT}/?replay=${encodeURIComponent(name)}&q=${process.env.Q || 1}${process.env.GPU === '0' ? '&gpu=0' : ''}${process.env.PREFETCH === '0' ? '&prefetch=0' : ''}${process.env.DIAG ? '&diag=1' : ''}`);
+await page.goto(`http://127.0.0.1:${PORT}/?replay=${encodeURIComponent(name)}&q=${process.env.Q || 1}${process.env.GPU === '0' ? '&gpu=0' : ''}${process.env.PREFETCH === '0' ? '&prefetch=0' : ''}${process.env.DIAG ? '&diag=1' : ''}${process.env.RASTER_THREAD ? '&rasterthread=' + process.env.RASTER_THREAD : ''}${process.env.VRAM_DIGEST === '1' ? '&vramdigest=1' : ''}`);
 await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, process.env.ASPECT || '16:9');
 await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.click('#btn-create');
@@ -128,8 +132,18 @@ const hwm = await page.evaluate(() => {
   return 0;
 });
 const gl = await page.evaluate(() => { const s = window.__cdg.state, g = s.game; const p = (i) => { try { return g._swt_probe(i) >>> 0; } catch { return -1; } };
-  return { resyncs: p(7), shown: s.display ? s.display.frames : -1, frame: (s.lastStats || {}).frame }; });
+  return { resyncs: p(7), shown: s.display ? s.display.frames : -1, frame: (s.lastStats || {}).frame,
+    readbacks: p(3), thread: p(11), syncs: p(12), waits: p(13) }; });
 console.log(`image GPU : ${gl.shown} images affichées pour ${gl.frame} images de jeu, ${gl.resyncs} renvois complets de la VRAM (retard de l’affichage)`);
+console.log(`dessin 1x : ${gl.thread === 1 ? 'sur son propre fil' : 'sur le fil d’émulation'} ; ${gl.readbacks} relectures de la VRAM par le jeu` +
+  (gl.thread === 1 ? ` ; ${gl.syncs} lectures ont trouvé du dessin en attente, dont ${gl.waits} avec mise en sommeil` : ''));
+if (process.env.VRAM_DIGEST === '1') {
+  const vd = await page.evaluate((n) => { const g = window.__cdg.state.game, o = [];
+    for (let f = 0; f <= n; f += 120) { const c = g._psx_web_vram_digest(f) >>> 0; if (c) o.push(f + ' ' + c.toString(16).padStart(8, '0')); }
+    return o; }, last);
+  fs.writeFileSync(path.join(out, 'vram.txt'), vd.join('\n') + '\n');
+  console.log(`empreintes VRAM : ${vd.length} écrites dans vram.txt`);
+}
 console.log(`tampon de dessin db1 : au plus ${(hwm / 1024).toFixed(1)} Ko utilisés sur 320 Ko (l’original en avait 160)`);
 console.log(frozen ? `ARRÊT/GEL à l’image ${last}` : `atteint l’image ${last}`);
 if (frozen) {
