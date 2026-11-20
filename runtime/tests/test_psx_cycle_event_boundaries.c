@@ -48,6 +48,9 @@ uint32_t cdrom_cycles_to_irq(uint32_t mask) {
     return s_cd_ready ? UINT32_MAX : s_cd_cycles_remaining;
 }
 uint32_t dma_cycles_to_internal_event(void) { return UINT32_MAX; }
+/* No GPU list transfer in this harness (psx_cycles.c asks before each step). */
+int dma_gpu_list_runs_alone(void) { return 0; }
+uint32_t dma_gpu_list_run(uint32_t max_cycles) { (void)max_cycles; return 0; }
 uint32_t dma_cycles_to_deliverable_irq(uint32_t mask) {
     (void)mask;
     return UINT32_MAX;
