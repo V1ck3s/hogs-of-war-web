@@ -618,6 +618,41 @@ static StaticMatchCache s_static_match_cache[STATIC_MATCH_CACHE_CAP];
  * entries that exist instead of the whole table. */
 static uint32_t s_static_match_used[STATIC_MATCH_CACHE_CAP];
 static uint32_t s_static_match_used_count = 0;
+/* Position of each slot in s_static_match_used, and, per 4 KB RAM page, the
+ * slots whose code span [lo_min, hi_max) touches the page: the same walk in
+ * the same order over the handful of variants near a PC instead of all of
+ * them. Kept exact by the single place that fills a slot; if the lists cannot
+ * grow (out of memory) the index is dropped for good and the walk goes back
+ * to every slot. */
+#define RESIDENT_PAGE_SHIFT 12u
+#define RESIDENT_PAGES      (0x00800000u >> RESIDENT_PAGE_SHIFT)
+typedef struct { uint32_t *slots; uint32_t n, cap; } ResidentBucket;
+static ResidentBucket s_resident_page[RESIDENT_PAGES];
+static uint32_t s_static_match_order[STATIC_MATCH_CACHE_CAP];
+static int s_resident_index_ok = 1;
+
+static void resident_index_span(uint32_t slot, uint32_t lo, uint32_t hi, int add) {
+    if (!s_resident_index_ok || hi <= lo) return;
+    if (hi > (RESIDENT_PAGES << RESIDENT_PAGE_SHIFT)) { s_resident_index_ok = 0; return; }
+    const uint32_t p1 = (hi - 1u) >> RESIDENT_PAGE_SHIFT;
+    for (uint32_t pg = lo >> RESIDENT_PAGE_SHIFT; pg <= p1; pg++) {
+        ResidentBucket *b = &s_resident_page[pg];
+        if (!add) {
+            for (uint32_t i = 0; i < b->n; i++) {
+                if (b->slots[i] == slot) { b->slots[i] = b->slots[--b->n]; break; }
+            }
+            continue;
+        }
+        if (b->n == b->cap) {
+            const uint32_t cap = b->cap ? b->cap * 2u : 8u;
+            uint32_t *grown = (uint32_t *)realloc(b->slots, (size_t)cap * sizeof *grown);
+            if (!grown) { s_resident_index_ok = 0; return; }
+            b->slots = grown;
+            b->cap = cap;
+        }
+        b->slots[b->n++] = slot;
+    }
+}
 
 /* Main-RAM offset of a variant code range, through the one geometry contract
  * (psx_memory.h). Retail targets fold the 2nd-4th mirrors of the 8 MiB KSEG
@@ -749,9 +784,18 @@ static int static_code_matches_full(const uint32_t *lo_len_pairs,
     if (!matches) s_static_match_crc_misses++;
 
     if (entry) {
-        if (!entry->ranges && s_static_match_used_count < STATIC_MATCH_CACHE_CAP)
-            s_static_match_used[s_static_match_used_count++] =
-                (uint32_t)(entry - s_static_match_cache);
+        const uint32_t slot_index = (uint32_t)(entry - s_static_match_cache);
+        const int listed = entry->ranges != NULL;
+        if (!listed && s_static_match_used_count < STATIC_MATCH_CACHE_CAP) {
+            s_static_match_order[slot_index] = s_static_match_used_count;
+            s_static_match_used[s_static_match_used_count++] = slot_index;
+        }
+        if (!listed) {
+            resident_index_span(slot_index, lo_min, hi_max, 1);
+        } else if (entry->lo_min != lo_min || entry->hi_max != hi_max) {
+            resident_index_span(slot_index, entry->lo_min, entry->hi_max, 0);
+            resident_index_span(slot_index, lo_min, hi_max, 1);
+        }
         entry->ranges = lo_len_pairs;
         entry->count = count;
         entry->expected_crc = expected_crc;
@@ -781,31 +825,67 @@ static int static_code_matches_full(const uint32_t *lo_len_pairs,
  *     or a band nothing was compiled for); DLL-path titles get the last
  *     residency hash as a hint instead.
  * The CRC is the one the variant was compiled from, so it maps straight back
- * to a capture / .EMI section offline. Called only on EXTERNAL interp
- * entries, so a 4096-slot scan is fine. */
+ * to a capture / .EMI section offline. Called on every EXTERNAL interp
+ * entry, a hundred times a frame in a battle that still interprets a few
+ * small routines: the walk goes through the page index (the variants whose
+ * span touches the PC's page), not through every cached variant -- tens of
+ * thousands for a whole-image AOT title, which cost 12-14 % of the
+ * WebAssembly emulation thread. Same variants considered in the same order
+ * (their position in s_static_match_used), so the same answer. */
+static int static_variant_pages_unchanged(const StaticMatchCache *e) {
+    uint32_t gen_sum = 0;
+    for (uint32_t k = 0; k < e->count; k++) {
+        uint32_t off = 0;
+        (void)static_range_offset(e->ranges[k * 2u], e->ranges[k * 2u + 1u], &off);
+        gen_sum += overlay_watch_pagegen_sum(off, e->ranges[k * 2u + 1u]);
+    }
+    return gen_sum == e->gen_sum;
+}
+
 uint32_t psx_overlay_resident_crc_at(uint32_t phys, int *valid) {
-    uint32_t stale = 0;
     if (!psx_ram_resolve(phys, 1u, &phys)) {
         if (valid) *valid = 0;
         return s_last_crc;
     }
-    for (uint32_t u = 0; u < s_static_match_used_count; u++) {
-        const StaticMatchCache *e = &s_static_match_cache[s_static_match_used[u]];
-        if (!e->ranges || phys < e->lo_min || phys >= e->hi_max)
-            continue;
-        if (e->matches) {
-            uint32_t gen_sum = 0;
-            for (uint32_t k = 0; k < e->count; k++) {
-                uint32_t off = 0;
-                (void)static_range_offset(e->ranges[k * 2u], e->ranges[k * 2u + 1u], &off);
-                gen_sum += overlay_watch_pagegen_sum(off, e->ranges[k * 2u + 1u]);
-            }
-            if (gen_sum == e->gen_sum) {
+    if (!s_resident_index_ok || (phys >> RESIDENT_PAGE_SHIFT) >= RESIDENT_PAGES) {
+        /* No index: every slot, in fill order. */
+        uint32_t stale = 0;
+        for (uint32_t u = 0; u < s_static_match_used_count; u++) {
+            const StaticMatchCache *e = &s_static_match_cache[s_static_match_used[u]];
+            if (!e->ranges || phys < e->lo_min || phys >= e->hi_max)
+                continue;
+            if (e->matches && static_variant_pages_unchanged(e)) {
                 if (valid) *valid = 1;
                 return e->expected_crc;
             }
+            if (!stale) stale = e->expected_crc;
         }
-        if (!stale) stale = e->expected_crc;
+        if (valid) *valid = 0;
+        return stale ? stale : s_last_crc;
+    }
+    /* First validating variant in fill order; failing one, the first
+     * spanning variant with a CRC. */
+    const ResidentBucket *b = &s_resident_page[phys >> RESIDENT_PAGE_SHIFT];
+    uint32_t win_order = 0xFFFFFFFFu, win_crc = 0;
+    uint32_t stale_order = 0xFFFFFFFFu, stale = 0;
+    for (uint32_t i = 0; i < b->n; i++) {
+        const uint32_t slot = b->slots[i];
+        const StaticMatchCache *e = &s_static_match_cache[slot];
+        if (!e->ranges || phys < e->lo_min || phys >= e->hi_max)
+            continue;
+        const uint32_t order = s_static_match_order[slot];
+        if (order < win_order && e->matches && static_variant_pages_unchanged(e)) {
+            win_order = order;
+            win_crc = e->expected_crc;
+        }
+        if (order < stale_order && e->expected_crc) {
+            stale_order = order;
+            stale = e->expected_crc;
+        }
+    }
+    if (win_order != 0xFFFFFFFFu) {
+        if (valid) *valid = 1;
+        return win_crc;
     }
     if (valid) *valid = 0;
     return stale ? stale : s_last_crc;
@@ -3150,6 +3230,7 @@ void overlay_loader_resync_validation_after_restore(void)
 #ifdef PSX_HAS_OVERLAY_DISPATCH
     memset(s_static_match_cache, 0, sizeof(s_static_match_cache));
     s_static_match_used_count = 0;
+    for (uint32_t pg = 0; pg < RESIDENT_PAGES; pg++) s_resident_page[pg].n = 0;
 #endif
 }
 
