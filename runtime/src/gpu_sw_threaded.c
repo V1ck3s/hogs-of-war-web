@@ -609,10 +609,15 @@ static void *native_thread(void *arg) {
     for (;;) {
         uint32_t tail = atomic_load(&s_ntail);
         if (tail == atomic_load(&s_nhead)) {
-            /* Calls come in bursts (a frame's display list): look again for a
-             * moment before sleeping, a wake-up costs the game more. */
+            /* A frame's display list reaches the ring in small groups, a
+             * few microseconds apart, for a millisecond or two. Sleeping
+             * between two groups made the emulation thread wake this one
+             * some fifteen times per frame (5 % of its time in the wake-up
+             * call, measured on a virtual machine where waking a thread is
+             * dear): keep looking for a few hundred microseconds first, so
+             * that one wake-up serves the whole list. */
             int again = 0;
-            for (int spin = 0; spin < 4000 && !again; spin++)
+            for (int spin = 0; spin < 300000 && !again; spin++)
                 again = atomic_load(&s_nhead) != tail;
             if (again) continue;
             pthread_mutex_lock(&s_nmu);
