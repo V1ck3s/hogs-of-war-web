@@ -530,6 +530,7 @@ static int      s_d24_cutover_blank = 0;
 /* Savestate restore → audio pump: re-anchor last_cycles (declared early so
  * psx_frontend_on_savestate_loaded can set it). */
 static int      g_audio_cycle_resync = 0;
+static void     audio_anchor_now(void);
 
 static void smooth_60_reset(void) {
     g_smooth_60_state.previous_source.clear();
@@ -1028,6 +1029,7 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
     s_fps_last_time = 0;
     s_fps_last_frame = 0;
     /* Re-anchor guest-cycle→sample budgeting (pump clears queued PCM too). */
+    audio_anchor_now();
     g_audio_cycle_resync = 1;
     /* Depth24 FMV: drop ephemeral present hold/cutover so restored VRAM shows.
      * Upload span came back with the GPU snap; treat MDEC as already active if
@@ -1057,6 +1059,7 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
 extern "C" void psx_frontend_on_rb_snap_loaded(void) {
     const int media = gpu_display_is_depth24() || mdec_recently_active(8) ||
                       cdrom_fmv_stream_pending() || cdrom_xa_stream_active();
+    audio_anchor_now();
     g_audio_cycle_resync = 1;
     gpu_depth24_on_savestate_loaded();
     s_d24_cutover_blank = 0;
@@ -3251,13 +3254,68 @@ static void sdl_audio_gain_ramp(int16_t* buf, int frames, float g0, float g1) {
  * sdl_audio_fadein_left is declared with present_session_reset. */
 static const int sdl_audio_fade_samples = 44100 * 40 / 1000;  /* 40 ms */
 
+/* Guest-clock SPU advance. The SPU makes one sample every 768 CPU cycles
+ * (33.8688 MHz / 44100 Hz), so production follows guest time exactly,
+ * including the real NTSC 59.94 Hz vblank, instead of assuming 60.00 Hz per
+ * present (that built in a -0.1 % deficit: 43950/s produced vs 44100/s
+ * consumed, recurring underruns). Rendering is driven from two places: the
+ * pump (vblank and frame end), which hands the samples to the host, and the
+ * SPU itself before every register/FIFO/DMA access (g_spu_access_hook), so
+ * that each write takes effect at its own sample. Rendering only at the pump
+ * applied all the writes of a 10-20 ms block at once: a voice keyed on and
+ * keyed off inside one block never sounded (short shots, rapid fire), and
+ * ENDX/envelope reads saw the state of the previous block.
+ * Samples wait in sdl_audio_buf (s_audio_pending frames) until the pump. A
+ * backlog beyond one buffer (after a stall) advances the SPU but keeps only
+ * the newest buffer of sound, as before; netplay never drops guest time. */
+static uint64_t s_audio_sample = UINT64_MAX;   /* guest sample rendered up to */
+static int      s_audio_pending = 0;
+
+/* Samples sit on an absolute grid (sample n starts at guest cycle 768 n), so
+ * two machines with the same guest clock cut them at the same cycles: a peer
+ * that joins from a snapshot (rendered up to its cycle, spu_snapshot_write)
+ * and re-anchors here continues on the host's grid. */
+static void audio_anchor_now(void) {
+    s_audio_sample = psx_get_cycle_count() / 768u;
+    s_audio_pending = 0;
+}
+
+static void audio_render_owed(bool discard_output) {
+    const int cap = (int)(sizeof(sdl_audio_buf) / (2 * sizeof(int16_t)));
+    const uint64_t now_sample = psx_get_cycle_count() / 768u;
+    if (s_audio_sample == UINT64_MAX || now_sample < s_audio_sample) s_audio_sample = now_sample;
+    uint64_t owed = now_sample - s_audio_sample;
+    s_audio_sample = now_sample;
+    if (owed == 0) return;
+    int frames = owed > (uint64_t)INT32_MAX ? INT32_MAX : (int)owed;
+    if (frames > cap && !psx_netplay_active()) {
+        /* Offline: a burst beyond one buffer (e.g. right after an unmute or a
+         * long stall) renders one full buffer and DROPs the remainder of the
+         * debt — mute-model freeze rather than time-compressing a backlog.
+         * Netplay never drops: both peers must consume the same guest debt. */
+        frames = cap;
+    }
+    audio_trace_event(AUDIO_EV_RENDER, (uint32_t)frames, (uint32_t)s_audio_pending);
+    while (frames > 0) {
+        if (s_audio_pending == cap) s_audio_pending = 0;   /* older sound: state only */
+        const int chunk = frames < cap - s_audio_pending ? frames : cap - s_audio_pending;
+        spu_render(sdl_audio_buf + s_audio_pending * 2, chunk);
+        s_audio_pending += chunk;
+        frames -= chunk;
+        if (discard_output) {
+            g_turbo_audio_sink_frames += (uint64_t)chunk;
+            audio_trace_event(AUDIO_EV_SINK_DROP, (uint32_t)chunk, 0);
+            s_audio_pending = 0;
+        }
+    }
+}
+
 static void sdl_audio_pump(bool discard_output = false) {
     /* Guest-cycle SPU advance must not depend on host audio device/backpressure.
      * Win↔Linux rollback forked on aux/spu when one peer skipped spu_render
      * (queue full / !drc / no device) while the other kept advancing. */
     const uint32_t bytes_per_frame = sizeof(int16_t) * 2u;
     const bool legacy = audio_legacy_mode();
-    const int netplay = psx_netplay_active();
     static int had_audio = 0;
     uint32_t queued = 0;   /* RENDER event b: bytes (legacy) / fill ms (bridge) */
     int host_queue_ok = 0;
@@ -3303,65 +3361,23 @@ static void sdl_audio_pump(bool discard_output = false) {
         host_queue_ok = 1;
     }
 
-    /* Faithful sample budget: the SPU is clocked by the GUEST, not by host
-     * presents. 33.8688 MHz / 44100 Hz = exactly 768 guest cycles per output
-     * frame, so production tracks guest time precisely — including the real
-     * NTSC 59.94 Hz vblank — instead of assuming 60.00 Hz per present, which
-     * built in a systematic -0.1% production deficit (measured: 43950/s
-     * produced vs 44100/s consumed = recurring ring underruns no +/-0.5%
-     * DRC trim could absorb during jitter spikes). */
-    extern uint64_t psx_cycle_count;
-    static uint64_t last_cycles = 0;
-    static uint64_t cycle_carry = 0;
-    const uint64_t now_cycles = psx_cycle_count;
     if (g_audio_cycle_resync) {
-        last_cycles = now_cycles;
-        cycle_carry = 0;
+        /* After a savestate: the SPU was re-anchored at the load (audio_anchor_now);
+         * drop what the host still had queued from before it. */
         g_audio_cycle_resync = 0;
         if (legacy && sdl_audio_device)
             psx_sdl_audio_clear(sdl_audio_device);
         else
             g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
-        return;
     }
-    if (last_cycles == 0) last_cycles = now_cycles;
-    uint64_t delta = (now_cycles - last_cycles) + cycle_carry;
-    last_cycles = now_cycles;
-    int frames = (int)(delta / 768u);
-    cycle_carry = delta % 768u;
-    if (frames <= 0) return;
-    if (frames > 2048 && !netplay) {
-        /* Offline: a burst beyond one buffer (e.g. right after an unmute or a
-         * long stall) renders one full buffer and DROPs the remainder of the
-         * debt — mute-model freeze rather than time-compressing a backlog.
-         * Netplay never drops: both peers must consume the same guest debt. */
-        frames = 2048;
-        cycle_carry = 0;
-    }
-
-    audio_trace_event(AUDIO_EV_RENDER, (uint32_t)frames, queued);
-
-    /* Catch up in ≤2048-frame chunks (sdl_audio_buf capacity). Only the last
-     * chunk may be handed to the host queue — earlier chunks advance state
-     * only (avoids dumping seconds of catch-up into the device ring). */
-    int remaining = frames;
-    int host_frames = 0;
-    while (remaining > 0) {
-        const int chunk = remaining > 2048 ? 2048 : remaining;
-        spu_render(sdl_audio_buf, chunk);
-        remaining -= chunk;
-        host_frames = chunk;
-        if (discard_output) {
-            g_turbo_audio_sink_frames += (uint64_t)chunk;
-            audio_trace_event(AUDIO_EV_SINK_DROP, (uint32_t)chunk, 0);
-        }
-    }
-    if (discard_output)
+    audio_render_owed(discard_output);
+    int frames = s_audio_pending;
+    s_audio_pending = 0;
+    if (discard_output || frames <= 0)
         return;
     if (!host_queue_ok || !sdl_audio_device)
         return;
 
-    frames = host_frames;
     if (sdl_audio_fadein_left > 0) {
         const float g0 = 1.0f - (float)sdl_audio_fadein_left
                                 / (float)sdl_audio_fade_samples;
@@ -3805,6 +3821,28 @@ static void runtime_perf_diag_tick() {
 enum AudioGate { AUDIO_GATE_NORMAL = 0, AUDIO_GATE_MUTED = 1, AUDIO_GATE_SINK = 2 };
 static AudioGate s_audio_gate = AUDIO_GATE_NORMAL;
 
+/* spu.c calls this before every SPU access (see audio_render_owed). It
+ * follows the pump's gate: nothing while muted (the SPU stays frozen in
+ * place), discarded sound during the turbo sink. Lockstep replays (g_ls_replay_active) do not advance
+ * guest time, so they do not render either. */
+static void audio_spu_access(void) {
+    extern int g_ls_replay_active;
+    /* PSX_SPU_RENDER_BLOCKS=1 keeps the former behaviour (the SPU advanced
+     * only at the pump), for A/B measurements with spu_keyon_stats. */
+    static int blocks = -1;
+    if (blocks < 0) {
+        const char *e = std::getenv("PSX_SPU_RENDER_BLOCKS");
+        blocks = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (blocks) return;
+    if (g_ls_replay_active || s_audio_gate == AUDIO_GATE_MUTED)
+        return;
+    audio_render_owed(s_audio_gate == AUDIO_GATE_SINK);
+}
+static struct AudioSpuHookInit {
+    AudioSpuHookInit() { g_spu_access_hook = audio_spu_access; }
+} s_audio_spu_hook_init;
+
 /* Invoked from the guest-derived VBlank edge (interrupts.c). */
 static void sdl_audio_pump_midframe(void) {
     /* Device optional: SPU still advances from guest cycles (netplay-safe). */
@@ -3848,6 +3886,7 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             const float g0 = (1.0f - (float)sdl_audio_fadein_left
                                      / (float)sdl_audio_fade_samples) * vol;
             sdl_audio_fadein_left = 0;
+            s_audio_pending = 0;
             spu_render(sdl_audio_buf, tail);
             sdl_audio_gain_ramp(sdl_audio_buf, tail, g0, 0.0f);
             audio_trace_event(AUDIO_EV_MUTE, (uint32_t)tail, 0);

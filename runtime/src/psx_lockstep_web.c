@@ -22,6 +22,7 @@
  * running a few percent faster or slower: the picture stays even, a fraction
  * of a second behind the player. Purely local pacing: which word goes to
  * which frame never changes. */
+#include "spu.h"
 #include "psx_lockstep.h"
 #include "psx_lockstep_playout.h"
 #include "crc32.h"
@@ -297,6 +298,14 @@ EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_lockstep_status(void) { return (uintptr_t
 EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_lockstep_gone(void) { return (uintptr_t)s_gone_after; }
 
 /* Guest RAM word, for the page's diagnostics and tests (read-only). */
+/* SPU key-on statistics (spu_keyon_stats): 0 key-ons, 1 key-offs less than
+ * a frame after their key-on, 2 key-offs before the first sample, 3 notes
+ * less than a frame old replaced by a new key-on. */
+EMSCRIPTEN_KEEPALIVE uint32_t psx_web_spu_stat(uint32_t i) {
+    uint32_t v[4] = {0, 0, 0, 0};
+    spu_keyon_stats(&v[0], &v[1], &v[2], &v[3]);
+    return i < 4 ? v[i] : 0;
+}
 EMSCRIPTEN_KEEPALIVE uint32_t psx_web_peek32(uint32_t addr) { return psx_mod_read_word(addr); }
 /* Tests only (single player): store a guest word from the page's thread. */
 EMSCRIPTEN_KEEPALIVE void psx_web_poke32(uint32_t addr, uint32_t value) { psx_mod_write_word(addr, value); }

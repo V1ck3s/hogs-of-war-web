@@ -9,6 +9,12 @@ extern "C" {
 
 void spu_init(void);
 void spu_render(int16_t* out_stereo, int frames);
+/* Called at the start of every SPU register, FIFO and DMA access. The
+ * frontend installs a hook that renders the samples the guest clock owes
+ * (768 CPU cycles per sample) before the access takes effect, so a key-on,
+ * key-off or register change lands at its own sample, as on the console,
+ * instead of all the writes of a 10-20 ms render block applying together. */
+extern void (*g_spu_access_hook)(void);
 
 typedef struct SpuDebugInfo {
     uint32_t ctrl;
@@ -116,6 +122,11 @@ typedef struct SpuEvent {
 } SpuEvent;
 
 uint64_t spu_event_total(void);
+/* Key-ons since reset; key-offs less than a 50 Hz frame after their key-on;
+ * key-offs before the voice's first sample; key-ons that replaced a sounding
+ * note less than a frame old. */
+void     spu_keyon_stats(uint32_t *ons, uint32_t *short_offs, uint32_t *unheard,
+                         uint32_t *retrigger);
 uint32_t spu_event_get(SpuEvent* out, uint32_t max_count);  /* most recent up to max_count */
 void     spu_event_reset(void);
 

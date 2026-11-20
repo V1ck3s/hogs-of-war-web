@@ -213,6 +213,31 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-11-20, evening (web-runtime branch: the SPU follows the guest clock at every access):**
+  The SPU was rendered only by the frontend pump (vblank edge and frame end),
+  so every register write of a 10-20 ms block took effect before any sample of
+  that block existed. Libsnd reads a voice's ENVX to manage it: a voice keyed
+  on earlier in the block still read 0 (no sample rendered yet), the driver
+  took it as finished and keyed it off — the note was never heard. Measured on
+  a recorded Cochons de Guerre session (9,000 frames): 91 of 645 key-ons were
+  keyed off before their first sample with block rendering, 0 now (the 25 key
+  -offs under one frame that remain are real short menu notes). Change:
+  spu.c calls `g_spu_access_hook` at the start of every register, FIFO and DMA
+  access; main.cpp renders there the samples the guest clock owes, on an
+  absolute grid (sample n = guest cycle 768 n), and the pump only hands the
+  pending samples to the host. Splitting a render changes no sample, so the
+  extra render points are free; what changes is that each write lands at its
+  own sample, as on hardware (PCSX-ReARMed `do_samples_if_needed` before
+  KON/KOFF is the in-tree comparative; psx-spx: one sample per 768 cycles).
+  `spu_snapshot_write` renders first, and a savestate load re-anchors on the
+  grid, so a peer joining from a snapshot cuts samples at the host's cycles.
+  Counters: `spu_keyon_stats` (key-ons, key-offs under a frame, before the
+  first sample, retriggers under a frame); `PSX_SPU_RENDER_BLOCKS=1` restores
+  the block behaviour for A/B. Open: the KON/KOFF latch itself (writes still
+  apply at once inside the current sample instead of at the next sample tick;
+  PCSX ignores a KOFF within 786 cycles of a KON for the keyed voices) — not
+  oracle-checked here, left as is. spu_fidelity_test: the same 4 ADSR-sweep
+  failures as before the change.
 - **2026-11-20, later (web-runtime branch: host cost of the per-instruction interlock):**
   A native profile of the same recorded battle, after the two fixes below,
   put 28 % of the CPU in the `psx_cyc_*` helpers and 4 % in

@@ -32,10 +32,19 @@
 #define SPU_VOICE_COUNT    24
 #define SPU_BLOCK_SAMPLES  28
 
+void (*g_spu_access_hook)(void) = NULL;
+static inline void spu_access_sync(void) { if (g_spu_access_hook) g_spu_access_hook(); }
+
 static uint8_t  spu_ram[SPU_RAM_SIZE];
 static uint16_t spu_regs[SPU_REG_COUNT];
 static uint32_t transfer_addr;
 static uint32_t key_on_count;
+/* Key-offs that came less than one 50 Hz frame (882 samples) after the
+ * voice's key-on, and those that came before its first sample: with the
+ * SPU rendered in 10-20 ms blocks such notes were cut or never heard.
+ * Observability for spu_keyon_stats (web replay tool). */
+static uint32_t s_koff_short, s_koff_unheard, s_kon_retrigger;
+static uint64_t s_voice_on_frame[SPU_VOICE_COUNT];
 static uint64_t render_frames;
 static uint64_t nonzero_frames;
 static int32_t last_peak;
@@ -970,6 +979,9 @@ static void key_on(uint32_t mask) {
     for (int i = 0; i < SPU_VOICE_COUNT; i++) {
         if (!(mask & (1u << i))) continue;
         SpuVoice *v = &voices[i];
+        if (v->active && v->adsr_phase != ADSR_RELEASE &&
+            render_frames - s_voice_on_frame[i] < 882u)
+            s_kon_retrigger++;   /* a note less than a frame old replaced */
         memset(v, 0, sizeof(*v));
         v->active = 1;
         /* Address registers count 8-byte units but hardware ignores bit0
@@ -984,6 +996,7 @@ static void key_on(uint32_t mask) {
         v->adsr_divider = 0;
         v->adsr_phase = ADSR_ATTACK;
         key_on_count++;
+        s_voice_on_frame[i] = render_frames;
         endx_latch &= ~(1u << i);  /* KEYON clears ENDX bit on real hw */
         spu_event_record(SPU_EV_KEYON, i, v->cur_addr);
     }
@@ -997,6 +1010,11 @@ static void key_off(uint32_t mask) {
     for (int i = 0; i < SPU_VOICE_COUNT; i++) {
         if (!(mask & (1u << i))) continue;
         if (!voices[i].active) continue;
+        if (voices[i].adsr_phase != ADSR_RELEASE) {
+            const uint64_t heard = render_frames - s_voice_on_frame[i];
+            if (heard < 882u) s_koff_short++;
+            if (heard == 0u) s_koff_unheard++;
+        }
         spu_event_record(SPU_EV_KEYOFF, i, voices[i].cur_addr);
         voices[i].adsr_phase = ADSR_RELEASE;
         voices[i].adsr_divider = 0;
@@ -1011,6 +1029,10 @@ void spu_init(void) {
     memset(s_events, 0, sizeof(s_events));
     transfer_addr = 0;
     key_on_count = 0;
+    s_koff_short = 0;
+    s_koff_unheard = 0;
+    s_kon_retrigger = 0;
+    memset(s_voice_on_frame, 0, sizeof(s_voice_on_frame));
     render_frames = 0;
     nonzero_frames = 0;
     last_peak = 0;
@@ -1396,6 +1418,7 @@ void spu_debug_info(SpuDebugInfo* out) {
 }
 
 uint32_t spu_read(uint32_t addr) {
+    spu_access_sync();
     if (addr >= 0x1F801C00u && addr <= 0x1F801DFFu) {
         uint32_t idx = reg_index(addr);
         if (idx < SPU_REG_COUNT) {
@@ -1485,6 +1508,7 @@ uint32_t spu_read(uint32_t addr) {
 }
 
 void spu_write(uint32_t addr, uint32_t value) {
+    spu_access_sync();
     if (addr >= 0x1F801C00u && addr <= 0x1F801DFFu) {
         uint32_t idx = reg_index(addr);
         if (idx < SPU_REG_COUNT) {
@@ -1591,6 +1615,7 @@ void spu_write(uint32_t addr, uint32_t value) {
 }
 
 void spu_dma_write(uint32_t word) {
+    spu_access_sync();
     spu_irq_check(transfer_addr, 4u);
     if (transfer_addr + 3 < SPU_RAM_SIZE) {
         spu_ram[transfer_addr]     = (uint8_t)(word & 0xFF);
@@ -1606,6 +1631,7 @@ void spu_dma_write(uint32_t word) {
  * exact mirror of spu_dma_write. Titles carry state through SPU RAM across
  * EXE transitions via this path; returning zeros breaks them. */
 uint32_t spu_dma_read(void) {
+    spu_access_sync();
     uint32_t word = 0;
     spu_irq_check(transfer_addr, 4u);
     if (transfer_addr + 3 < SPU_RAM_SIZE) {
@@ -1704,6 +1730,13 @@ void spu_get_global_state(SpuGlobalState* out) {
 
 uint64_t spu_event_total(void) { return s_event_seq; }
 
+void spu_keyon_stats(uint32_t *ons, uint32_t *short_offs, uint32_t *unheard, uint32_t *retrigger) {
+    if (retrigger) *retrigger = s_kon_retrigger;
+    if (ons) *ons = key_on_count;
+    if (short_offs) *short_offs = s_koff_short;
+    if (unheard) *unheard = s_koff_unheard;
+}
+
 uint32_t spu_event_get(SpuEvent* out, uint32_t max_count) {
     if (!out || max_count == 0) return 0;
     uint64_t avail = s_event_seq < (uint64_t)SPU_EVENT_CAP
@@ -1789,6 +1822,9 @@ uint32_t spu_snapshot_bytes(void) {
 }
 
 void spu_snapshot_write(uint8_t *p) {
+    /* Render what the guest clock owes first: the snapshot then holds the
+     * SPU exactly at its cycle, and a peer loading it continues from there. */
+    spu_access_sync();
     PstW w;
     uint32_t n = spu_snapshot_bytes();
     pst_w_init(&w, p, n);
