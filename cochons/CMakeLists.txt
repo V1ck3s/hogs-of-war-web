@@ -28,6 +28,19 @@ psxrecomp_add_game_runtime(psx-runtime
     GEN_FULL_GLOB "generated/SLES_027.66_full_*.c"
 )
 
+# The main executable recompiles into a few enormous functions (one file is a
+# single function of 300,000 lines) and takes about 1 % of the run time: the
+# game lives in the modules it loads. With the cycle helpers' settled test at
+# every instruction those files took the optimizer tens of minutes and over a
+# gigabyte each; with the interlock written out (psx_cyc.h) and the I-cache
+# fetch left as a call (psx_icache.h) it folds them in seconds, into less code.
+file(GLOB _cochons_main_exe_c CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/SLES_027.66_full_*.c")
+if(_cochons_main_exe_c)
+    set_source_files_properties(${_cochons_main_exe_c} PROPERTIES
+        COMPILE_DEFINITIONS "PSX_CYC_WRITTEN_OUT=1;PSX_ICACHE_FETCH_CALL=1")
+endif()
+
 # Frontschweine's game-owned plugins, retargeted to the French release.
 # Fast Enemy AI: French routine located at 0x8006ADA0 (battle module loaded
 # 0x30 higher than in SLES-02767) and proven equivalent (tests/terrain_line_equiv.c).

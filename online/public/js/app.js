@@ -394,13 +394,20 @@ function noteLog(t) {
   if (recentLog.length > 40) recentLog.shift();
   if (/execution completed|abort|fatal|Aborted/i.test(t)) reportProblem('arret', { line: String(t).slice(0, 300) });
 }
+// Emulation, picture (page), sound and network already keep four threads
+// busy; the 1x rasterizer gets its own only where a core is left for it.
+function rasterThread() {
+  const p = params.get('rasterthread');
+  if (p === '0' || p === '1') return p === '1';
+  return (navigator.hardwareConcurrency || 4) >= 4;
+}
 let problemShown = false;
 function pageInfo() {
   const M = state.game;
   const info = { gpu: !!state.gpu, q: quality(), aspect: aspectRatioText(chosenAspect()), shown: state.display ? state.display.frames : -1,
     lastPump: state.display && state.display.lastPumpAt ? Math.round(performance.now() - state.display.lastPumpAt) : -1,
     ua: navigator.userAgent.slice(0, 160) };
-  try { if (M && M._swt_probe) info.probe = [0, 1, 2, 3, 4, 7, 8, 9].map((i) => M._swt_probe(i) >>> 0); } catch { /* ignore */ }
+  try { if (M && M._swt_probe) info.probe = [0, 1, 2, 3, 4, 7, 8, 9, 11, 12, 13].map((i) => M._swt_probe(i) >>> 0); } catch { /* ignore */ }
   return info;
 }
 function exitTrace() {
@@ -522,6 +529,13 @@ async function startGame(go) {
         // participant (what the game reads must match: lockstep).
         // (?rasterskip=1: tests only, every peer of a room must use the same.)
         PSX_WEB_SKIP_NATIVE_RASTER: params.get('rasterskip') === '1' ? '1' : '0',
+        // The game's own 1x picture (what it reads back) is drawn on a thread
+        // of its own when the machine has cores to spare. The game waits for
+        // that thread before every read, so what it reads is the same either
+        // way: each page decides for itself (?rasterthread=0 or 1).
+        PSX_WEB_RASTER_THREAD: rasterThread() ? '1' : '0',
+        // Tests: a digest of the game's VRAM next to each game digest.
+        ...(params.get('vramdigest') === '1' ? { PSX_WEB_VRAM_DIGEST: '1' } : {}),
         ...(params.get('memo') === '0' ? { PSX_OVERLAY_MEMO: '0' } : {}),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
