@@ -152,8 +152,14 @@ static void harness_snapshots(uint32_t frame) {
     }
 }
 
+/* PSX_LOCKSTEP_UNPACED=1: the scripted run is not held to the guest's frame
+ * rate (benchmarks: how long the same frames take to compute). */
+extern volatile int g_psx_lockstep_hurry;
+static int s_unpaced;
+
 static int script_provider(uint32_t frame, uint16_t pads[2]) {
     harness_snapshots(frame);
+    g_psx_lockstep_hurry = s_unpaced;
     while (s_row < s_nrows && s_rows[s_row].frame <= frame) {
         s_cur[0] = s_rows[s_row].w0;
         s_cur[1] = s_rows[s_row].w1;
@@ -237,6 +243,10 @@ void psx_lockstep_init_from_env(void) {
     if (digest) s_digest = fopen(digest, "w");
     if (every && atoi(every) > 0) s_digest_every = (uint32_t)atoi(every);
     if (end) s_end = (uint32_t)strtoul(end, NULL, 10);
+    {
+        const char *u = getenv("PSX_LOCKSTEP_UNPACED");
+        s_unpaced = u && u[0] && u[0] != '0';
+    }
     /* PSX_LOCKSTEP_DUMP=f1,f2,... + PSX_LOCKSTEP_DUMP_DIR: RAM images at
      * exact frames (reverse engineering by diffing deterministic runs). */
     {
