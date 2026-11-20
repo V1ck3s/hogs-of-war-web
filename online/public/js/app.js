@@ -536,6 +536,7 @@ async function startGame(go) {
         PSX_WEB_RASTER_THREAD: rasterThread() ? '1' : '0',
         // Tests: a digest of the game's VRAM next to each game digest.
         ...(params.get('vramdigest') === '1' ? { PSX_WEB_VRAM_DIGEST: '1' } : {}),
+        ...(params.get('spublocks') === '1' ? { PSX_SPU_RENDER_BLOCKS: '1' } : {}),
         ...(params.get('memo') === '0' ? { PSX_OVERLAY_MEMO: '0' } : {}),
         PSX_NO_LAUNCHER: '1',
         PSX_OVERLAY_AUTOCOMPILE_OFF: '1',
@@ -686,6 +687,7 @@ async function attach(Module, go) {
     node.connect(ctx.destination);
     node.port.postMessage({ volume: +$('#volume').value });
     $('#volume').oninput = () => node.port.postMessage({ volume: +$('#volume').value });
+    node.port.onmessage = (e) => { if (e.data.stats) state.audioStats = e.data.stats; };
     state.audio = ctx;
     const resume = () => { if (ctx.state !== 'running') ctx.resume(); };
     addEventListener('keydown', resume);
@@ -741,11 +743,11 @@ function onStats(m) {
 // second), drawing cost per screen refresh, network waits, and how evenly
 // the frames followed one another. This is how a slow machine or a rough
 // link shows up without anyone having to describe it.
-const perf = { n: 0, sum: 0, min: Infinity, since: 0, wait: 0, even: null };
+const perf = { n: 0, sum: 0, min: Infinity, since: 0, wait: 0, even: null, audio: null };
 function perfNote(fps) {
   const m = state.lastStats;
   if (!state.worker || !m) return;
-  if (!perf.n) { perf.since = performance.now(); perf.wait = m.waitMs; perf.even = m.even; }
+  if (!perf.n) { perf.since = performance.now(); perf.wait = m.waitMs; perf.even = m.even; perf.audio = state.audioStats || null; }
   perf.n++; perf.sum += fps; perf.min = Math.min(perf.min, fps);
   if (performance.now() - perf.since < 30000) return;
   const e0 = perf.even || {}, e1 = m.even || {};
@@ -754,6 +756,13 @@ function perfNote(fps) {
     waitMs: m.waitMs - perf.wait, mine: m.holder >= 0 && state.players[m.holder] === state.id,
     frames: (e1.n || 0) - (e0.n || 0), late: (e1.late || 0) - (e0.late || 0), hitch: (e1.hitch || 0) - (e0.hitch || 0), gapMaxMs: e1.maxMs || 0,
     play: m.play, hidden: document.hidden,
+    // Sound over the same half minute: silences (the game fell behind the
+    // sound card), game sound cut (a backlog over a second), cushion (ms) and
+    // read speed (per mille off the nominal) at the end.
+    ...(state.audioStats ? { audio: {
+      under: state.audioStats.underruns - ((perf.audio || {}).underruns || 0),
+      cutMs: Math.round((state.audioStats.cut - ((perf.audio || {}).cut || 0)) / 44.1),
+      fillMs: Math.round(state.audioStats.fill / 44.1), speed: Math.round((state.audioStats.ratio - 1) * 1000) } } : {}),
     ...(state.display && state.display.takePerf ? state.display.takePerf() : {}),
   };
   perf.n = 0; perf.sum = 0; perf.min = Infinity;

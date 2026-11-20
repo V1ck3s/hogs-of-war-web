@@ -10,10 +10,17 @@ dispatcher (*_aot) and appends the combined entry points the runtime calls.
 
   python3 tools/merge_static_overlays.py <caps-static-dir>   (from cochons/)
 Re-run after every `generate` (which rewrites generated/overlays_static.c).
+
+The capture units must be compiled with the current game.toml: a unit
+compiled before a [[recompiler.patch]] existed keeps the original instruction,
+and the dispatcher falls back to it whenever the AOT set has no entry for a PC
+(a loop resumed after an interrupt, for instance). The merge refuses such a
+set: recompile it (compile_overlays.py --static --force) after adding a patch.
 """
 import re
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 
 SYMS = ['psx_overlay_dispatch', 'psx_overlay_static_can_dispatch', 'psx_overlay_static_get_stats',
@@ -27,8 +34,30 @@ def rename_definitions(text, suffix):
     return text
 
 
+def unpatched_sites(src):
+    """(file, patch id) for every compiled instruction that still has a
+    patch's expected word at the patch address. The recompiler replaces that
+    word wherever it finds it, so such code predates the patch."""
+    with open('game.toml', 'rb') as f:
+        patches = tomllib.load(f).get('recompiler', {}).get('patch', [])
+    stale = []
+    for f in sorted(src.glob('overlays_static*.c')):
+        text = f.read_text()
+        for p in patches:
+            addr, expected = int(p['address'], 16), int(p['expected'], 16)
+            if f'/* 0x{addr:08X}: 0x{expected:08X} */' in text:
+                stale.append((f.name, p['id']))
+    return stale
+
+
 def main():
     src = Path(sys.argv[1])
+    stale = unpatched_sites(src)
+    if stale:
+        for name, pid in stale:
+            print(f'{name}: patch {pid} not applied', file=sys.stderr)
+        sys.exit(f'{len(stale)} unpatched site(s): the capture units predate game.toml; '
+                 'recompile them with compile_overlays.py --static --force')
     gen = Path('generated')
     caps = gen / 'caps'
     if caps.exists():

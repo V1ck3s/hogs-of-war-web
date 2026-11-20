@@ -40,7 +40,7 @@ const page = await b.newPage();
 await page.setViewport({ width: 1100, height: 620 });
 page.on('console', (m) => { const t = m.text(); if (!/lockstep frame|GL Driver Message/.test(t)) console.log('[page]', t.slice(0, 300)); });
 page.on('pageerror', (e) => console.log('[page error]', e.message));
-await page.goto(`http://127.0.0.1:${PORT}/?replay=${encodeURIComponent(name)}&q=${process.env.Q || 1}${process.env.GPU === '0' ? '&gpu=0' : ''}${process.env.PREFETCH === '0' ? '&prefetch=0' : ''}${process.env.DIAG ? '&diag=1' : ''}${process.env.RASTER_THREAD ? '&rasterthread=' + process.env.RASTER_THREAD : ''}${process.env.VRAM_DIGEST === '1' ? '&vramdigest=1' : ''}`);
+await page.goto(`http://127.0.0.1:${PORT}/?replay=${encodeURIComponent(name)}&q=${process.env.Q || 1}${process.env.GPU === '0' ? '&gpu=0' : ''}${process.env.PREFETCH === '0' ? '&prefetch=0' : ''}${process.env.DIAG ? '&diag=1' : ''}${process.env.RASTER_THREAD ? '&rasterthread=' + process.env.RASTER_THREAD : ''}${process.env.VRAM_DIGEST === '1' ? '&vramdigest=1' : ''}${process.env.SPU_BLOCKS === '1' ? '&spublocks=1' : ''}`);
 await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, process.env.ASPECT || '16:9');
 await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.click('#btn-create');
@@ -48,16 +48,17 @@ await page.waitForSelector('#room:not([hidden])');
 await page.click('#btn-start');
 await page.waitForFunction(() => document.querySelector('#splash').hidden, { timeout: 120000 });
 const frame = () => page.evaluate(() => (window.__cdg.state.lastStats || {}).frame || 0);
-// DUMP_AT=f1,f2,...: guest RAM images (2 MB) once the game passes those frames.
+// DUMP_AT=f1,f2,...: guest RAM images (2 MB, or DUMP_MB) once the game passes those frames.
 const dumps = (process.env.DUMP_AT || '').split(',').filter(Boolean).map(Number);
 async function dumpRam(tag) {
-  const b64 = await page.evaluate(() => {
-    const g = window.__cdg.state.game, n = 0x200000 / 4, u = new Uint32Array(n);
+  // DUMP_MB=8: the whole 8 MB main RAM of the wide view (moved packet buffer db1).
+  const b64 = await page.evaluate((mb) => {
+    const g = window.__cdg.state.game, n = mb * 0x100000 / 4, u = new Uint32Array(n);
     for (let i = 0; i < n; i++) u[i] = g._psx_web_peek32(0x80000000 + i * 4);
     const b = new Uint8Array(u.buffer); let s = '';
     for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
     return btoa(s);
-  });
+  }, +(process.env.DUMP_MB || 2));
   fs.writeFileSync(path.join(out, `ram_${tag}.bin`), Buffer.from(b64, 'base64'));
   console.log(`      RAM enregistrée : ram_${tag}.bin`);
 }
@@ -102,6 +103,7 @@ async function dirtySnap(f) {
   console.log(`      interpréteur : dirty_${f}.json (${rows.length} PC)`);
 }
 const dirtyAt = (process.env.DIRTY_AT || '').split(',').filter(Boolean).map(Number);
+const bursts = (process.env.BURST_AT || '').split(',').filter(Boolean).map(Number);
 const profAt = (process.env.PROFILE_AT || '').split(',').filter(Boolean).map(Number);
 let last = 0, lastT = Date.now(), frozen = false, shot = 0;
 const t0 = Date.now();
@@ -119,6 +121,12 @@ for (;;) {
   if (f !== last) { last = f; lastT = Date.now(); } else if (Date.now() - lastT > 15000) { frozen = true; break; }
   while (dirtyAt.length && f >= dirtyAt[0]) await dirtySnap(dirtyAt.shift());
   while (profAt.length && f >= profAt[0]) { const at = profAt.shift(); await profileWorkers(at); lastT = Date.now(); }
+  // BURST_AT=f: ten pictures back to back once the game passes frame f
+  // (with their frame numbers), to see a picture that changes from frame to frame.
+  while (bursts.length && f >= bursts[0]) {
+    bursts.shift();
+    for (let i = 0; i < 10; i++) { const bf = await frame(); await page.screenshot({ path: path.join(out, `b_${bf}_${i}.png`) }); }
+  }
   while (dumps.length && f >= dumps[0]) { dumps.shift(); await dumpRam(String(await frame())); await page.screenshot({ path: path.join(out, `d_${await frame()}.png`) }); }
   if (f >= UNTIL) break;
   if (Date.now() - t0 > shot * 30000) { console.log(`      t=${((Date.now() - t0) / 1000) | 0}s image ${f}`); await page.screenshot({ path: path.join(out, `r_${String(shot).padStart(3, '0')}.png`) }); shot++; }
@@ -137,6 +145,10 @@ const gl = await page.evaluate(() => { const s = window.__cdg.state, g = s.game;
 console.log(`image GPU : ${gl.shown} images affichées pour ${gl.frame} images de jeu, ${gl.resyncs} renvois complets de la VRAM (retard de l’affichage)`);
 console.log(`dessin 1x : ${gl.thread === 1 ? 'sur son propre fil' : 'sur le fil d’émulation'} ; ${gl.readbacks} relectures de la VRAM par le jeu` +
   (gl.thread === 1 ? ` ; ${gl.syncs} lectures ont trouvé du dessin en attente, dont ${gl.waits} avec mise en sommeil` : ''));
+const spu = await page.evaluate(() => { const g = window.__cdg.state.game; try { return [0, 1, 2, 3].map((i) => g._psx_web_spu_stat(i) >>> 0); } catch { return null; } });
+const snd = await page.evaluate(() => window.__cdg.state.audioStats || null);
+if (snd) console.log(`sortie son : ${snd.underruns} silences, ${(snd.cut / 44.1).toFixed(0)} ms coupés, réserve ${(snd.fill / 44.1).toFixed(0)} ms, vitesse ${((snd.ratio - 1) * 100).toFixed(2)} %`);
+if (spu) console.log(`son : ${spu[0]} notes lancées ; ${spu[1]} arrêtées moins d’une image après leur départ, dont ${spu[2]} avant leur premier échantillon ; ${spu[3]} remplacées par une autre moins d’une image après leur départ`);
 if (process.env.VRAM_DIGEST === '1') {
   const vd = await page.evaluate((n) => { const g = window.__cdg.state.game, o = [];
     for (let f = 0; f <= n; f += 120) { const c = g._psx_web_vram_digest(f) >>> 0; if (c) o.push(f + ' ' + c.toString(16).padStart(8, '0')); }
