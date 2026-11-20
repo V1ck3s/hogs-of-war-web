@@ -31,7 +31,7 @@ async function browser(name, q, aspect) {
   await page.setViewport({ width: 1100, height: 620 });
   page.on('console', (m) => { const t = m.text(); if (/désynchro|error|snapshot|savestate: (LOAD|SAVE)|\[partie\]|\[lockstep\]/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.PLAYOUT === '0' ? '&playout=0' : ''}${roomCode ? '&salon=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
   await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
@@ -120,9 +120,14 @@ check(a.team > 0, `la bataille a commencé (équipe ${a.team} joue)`);
 
 // Turn by turn: the owner walks; the game's network wait over the turn.
 const waitOf = (p) => p.evaluate(() => (window.__cdg.state.lastStats || {}).waitMs || 0);
+// How evenly a page's game takes its frames (counted by the game itself).
+const evenOf = (p) => p.evaluate(() => { const s = window.__cdg.state.lastStats || {}; return { ...(s.even || { n: 0, late: 0, hitch: 0 }), play: s.play || { low: 0, level: 0, dry: 0 } }; });
 async function measureTurn(team, who, other) {
   for (let i = 0; i < 180; i++) { const x = await info(host.page); if ((x.team & 0xff) === team && !(x.team & 0x100)) break; await sleep(1000); }
+  // The watcher's buffer settles during the first second of the turn.
+  await sleep(1500);
   const w0 = await waitOf(who.page), f0 = (await info(who.page)).frame, t0 = Date.now();
+  const e0 = await evenOf(other.page);
   let behind = 0;
   for (const k of ['ArrowUp', 'ArrowLeft', 'ArrowUp', 'ArrowRight']) {
     await who.page.keyboard.down(k); await sleep(3000); await who.page.keyboard.up(k);
@@ -130,8 +135,11 @@ async function measureTurn(team, who, other) {
     behind = Math.max(behind, x.frame - y.frame);
   }
   const w1 = await waitOf(who.page), f1 = (await info(who.page)).frame, secs = (Date.now() - t0) / 1000;
-  console.log(`      tour de ${who.name} : ${f1 - f0} images en ${secs.toFixed(1)} s, attente réseau ${w1 - w0} ms ; ${other.name} regarde jusqu’à ${behind} images derrière`);
-  return { wait: w1 - w0, frames: f1 - f0, secs };
+  const e1 = await evenOf(other.page);
+  const late = e1.late - e0.late, hitch = e1.hitch - e0.hitch, n = e1.n - e0.n;
+  console.log(`      tour de ${who.name} : ${f1 - f0} images en ${secs.toFixed(1)} s, attente réseau ${w1 - w0} ms ; ${other.name} regarde jusqu’à ${behind} images derrière, ` +
+    `${late} image(s) en retard et ${hitch} à-coup(s) sur ${n} (tampon ${e1.play.low}/${e1.play.level}, à sec ${e1.play.dry - e0.play.dry} fois)`);
+  return { wait: w1 - w0, frames: f1 - f0, secs, late, hitch, n };
 }
 const total0 = await Promise.all([host, guest].map((x) => waitOf(x.page)));
 const ta = await measureTurn(1, host, guest);

@@ -118,12 +118,23 @@ export class GpuDisplay {
   constructor(canvas, Module, scale, onFail) {
     this.canvas = canvas;
     this.frames = 0;
-    const loop = () => {
+    // What drawing costs this page (read and restarted by takePerf): time
+    // spent replaying the game's drawing per refresh, and the longest wait
+    // between two refreshes.
+    this.perf = { pumps: 0, pumpMs: 0, pumpMax: 0, gapMax: 0 };
+    let cw = 0, ch = 0, sizedAt = -1e9;
+    const loop = (now) => {
       const c = this.canvas;
-      const dpr = devicePixelRatio || 1;
-      const cw = Math.max(1, Math.round(c.clientWidth * dpr));
-      const ch = Math.max(1, Math.round(c.clientHeight * dpr));
-      if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+      // The window's size is read a few times a second, not at every refresh
+      // (reading it makes the browser lay the page out again).
+      if (now - sizedAt > 250) {
+        sizedAt = now;
+        const dpr = devicePixelRatio || 1;
+        cw = Math.max(1, Math.round(c.clientWidth * dpr));
+        ch = Math.max(1, Math.round(c.clientHeight * dpr));
+        if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+      }
+      const t0 = performance.now();
       let n = 0;
       try { n = Module._swt_gl_pump(cw, ch, scale); } catch (e) {
         // Keep drawing attempts going; the page's error report tells why.
@@ -131,11 +142,22 @@ export class GpuDisplay {
         throw e;
       }
       if (n < 0) { onFail(); return; }
+      const t1 = performance.now();
+      const p = this.perf;
+      p.pumps++; p.pumpMs += t1 - t0;
+      if (t1 - t0 > p.pumpMax) p.pumpMax = t1 - t0;
+      if (this.lastPumpAt && t0 - this.lastPumpAt > p.gapMax) p.gapMax = t0 - this.lastPumpAt;
       this.frames += n;
-      this.lastPumpAt = performance.now();
+      this.lastPumpAt = t0;
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
+  }
+
+  takePerf() {
+    const p = this.perf;
+    this.perf = { pumps: 0, pumpMs: 0, pumpMax: 0, gapMax: 0 };
+    return { refreshes: p.pumps, drawMs: p.pumps ? +(p.pumpMs / p.pumps).toFixed(2) : 0, drawMaxMs: Math.round(p.pumpMax), gapMaxMs: Math.round(p.gapMax) };
   }
 
   stop() { cancelAnimationFrame(this.raf); }

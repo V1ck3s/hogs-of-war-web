@@ -8,7 +8,12 @@ import { Input, ACTIONS, keyLabel } from './input.js';
 import { Display, GpuDisplay } from './display.js';
 
 const $ = (s) => document.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const params = new URLSearchParams(location.search);
+const store = {
+  get(k) { try { return localStorage.getItem(`cdg.online.${k}`); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(`cdg.online.${k}`, v); } catch { /* private mode */ } },
+};
 const state = {
   ws: null, id: null, room: null, version: null, game: null, worker: null,
   audio: null, session: null, players: [], names: new Map(), lastStats: null,
@@ -18,43 +23,73 @@ const input = new Input();
 // ------------------------------------------------------------------ UI basics
 function show(section) {
   for (const s of ['#lobby', '#room', '#play']) $(s).hidden = s !== section;
+  // The game page is fixed to the window; the others scroll.
+  document.documentElement.style.overflow = section === '#play' ? 'hidden' : '';
 }
 function toast(text, ms = 4000) {
-  const d = document.createElement('div');
-  d.className = 'toast';
-  d.textContent = text;
+  const d = el('div', 'toast', text);
+  d.style.setProperty('--life', `${ms}ms`);
   $('#toasts').append(d);
   setTimeout(() => d.remove(), ms);
 }
+// Problems on the home page stay written under the title until the next try.
+function lobbyError(text) {
+  $('#lobby-error').textContent = text || '';
+  $('#lobby-error').hidden = !text;
+}
 function inviteLink() { return `${location.origin}${location.pathname}?salon=${state.room.code}`; }
-async function copyInvite() {
-  try { await navigator.clipboard.writeText(inviteLink()); toast('Lien copié.'); } catch { prompt('Lien d’invitation :', inviteLink()); }
+async function copyInvite(e) {
+  const b = e && e.currentTarget;
+  try {
+    await navigator.clipboard.writeText(inviteLink());
+    if (b) {
+      b.dataset.label ||= b.textContent;
+      b.textContent = 'Lien copié ✓';
+      clearTimeout(b.timer);
+      b.timer = setTimeout(() => { b.textContent = b.dataset.label; }, 2000);
+    } else toast('Lien copié.');
+  } catch { prompt('Lien d’invitation :', inviteLink()); }
 }
 
-$('#name').value = localStorage.getItem('cdg.online.name') || '';
-if (params.get('salon')) {
+const cleanCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+const invited = cleanCode(params.get('salon'));
+$('#name').value = store.get('name') || '';
+if (invited.length === 4) {
   $('#invite').hidden = false;
-  $('#invite-code').textContent = params.get('salon').toUpperCase();
-  $('#code').value = params.get('salon').toUpperCase();
+  $('#invite-code').textContent = invited;
+  $('#code').value = invited;
+  $('#btn-invite-join').textContent = `Rejoindre le salon ${invited}`;
+  $('#btn-create').classList.remove('primary');   // the invitation is what the page puts forward
 }
+if (!$('#name').value) $('#name').focus();
 
 // ------------------------------------------------------------------ preload
 // The game is fetched (and kept by the browser cache) while players gather in
 // the lobby, so starting a game is immediate.
+async function compileGame(url) {
+  // Compiled while it downloads; the browser keeps the compiled code with the
+  // cached file, so the next visits skip most of the compilation.
+  if (WebAssembly.compileStreaming) {
+    try { return await WebAssembly.compileStreaming(fetch(url)); } catch { /* e.g. a proxy changed the type: plain way below */ }
+  }
+  return WebAssembly.compile(await (await fetch(url)).arrayBuffer());
+}
 const preload = (async () => {
   const info = await (await fetch('/game/info.json')).json();
   if (!info.ready) throw new Error('Le serveur n’a pas encore préparé le jeu.');
   state.version = info.version;
+  $('#build').textContent = `· version ${String(info.version).slice(0, 8)}`;
   const v = `?v=${info.version}`;
-  const [manifest, files, wasm] = await Promise.all([
+  const [manifest, files, module] = await Promise.all([
     fetch(`/game/files.json${v}`).then((r) => r.json()),
     fetch(`/game/files.bin${v}`).then((r) => r.arrayBuffer()),
-    fetch(`/game/Cochons_de_Guerre.wasm${v}`).then((r) => r.arrayBuffer()),
+    compileGame(`/game/Cochons_de_Guerre.wasm${v}`),
+    // The game's loader script, read again by its threads: into the cache now.
+    fetch(`/game/Cochons_de_Guerre.js${v}`).then((r) => r.arrayBuffer()).catch(() => null),
   ]);
-  const module = await WebAssembly.compile(wasm);
   return { manifest, files: new Uint8Array(files), module, v };
 })();
-// Preload shown in the lobby and to the room: the game (~5 MB), then the disc
+// Preload shown in the lobby and to the room: the game (~3 MB), then the disc
 // chunks games read (boot, menus, battles; ~20-40 MB). With everything in the
 // browser cache, a slow connection only costs the time of this preload.
 const loadState = { game: false, failed: '', disc: null };
@@ -67,8 +102,11 @@ function showLoad() {
   else if (!loadState.game) text = 'Préchargement : le jeu…';
   else if (d && d.total && d.done < d.total) text = `Préchargement du disque : ${(d.done * d.chunk / 1048576).toFixed(0)} / ${(d.total * d.chunk / 1048576).toFixed(0)} Mo (${pct} %) — vous pouvez lancer avant la fin, le reste arrivera pendant la partie.`;
   else text = 'Jeu et disque préchargés : prêt à jouer.';
-  $('#preload').textContent = text;
-  const p2 = $('#preload2'); if (p2) p2.textContent = text;
+  for (const [t, b] of [['#preload', '#preload-bar'], ['#preload2', '#preload-bar2']]) {
+    $(t).textContent = text;
+    $(b).style.width = `${loadState.failed ? 100 : Math.max(pct, 3)}%`;
+    $(b).parentElement.className = `bar${loadState.failed ? ' failed' : pct >= 100 ? ' done' : ''}`;
+  }
   if (pct !== state.readySent && (!state.readyAt || Date.now() - state.readyAt > 2000 || pct === 100)) {
     if (state.ws && state.ws.readyState === 1) {
       state.readySent = pct; state.readyAt = Date.now();
@@ -89,13 +127,21 @@ if (params.get('prefetch') !== '0') {
 } else loadState.disc = { done: 0, total: 0, chunk: 0 };
 
 // ------------------------------------------------------------------ socket
+const myName = () => $('#name').value.trim() || 'Cochon';
 function connect() {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     state.ws = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: $('#name').value.trim() || 'Cochon' }));
-    ws.onerror = () => reject(new Error('Connexion au serveur impossible.'));
-    ws.onclose = () => { if (state.room) toast('Connexion au serveur perdue.', 8000); };
+    ws.onopen = () => { state.helloName = myName(); ws.send(JSON.stringify({ t: 'hello', name: state.helloName })); };
+    ws.onerror = () => reject(new Error('Connexion au serveur impossible. Vérifiez le lien, puis réessayez.'));
+    ws.onclose = () => {
+      clearInterval(ws.pinger);
+      if (state.ws !== ws || !state.room) return;
+      if (state.game) { toast('Connexion au serveur perdue.', 8000); return; }
+      state.room = null;
+      show('#lobby');
+      lobbyError('La connexion au serveur a été perdue. Rejoignez le salon à nouveau.');
+    };
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') { onSnapshot(e.data); return; }
@@ -103,7 +149,7 @@ function connect() {
       if (m.t === 'welcome') { state.id = m.id; state.key = m.key; resolve(); state.readySent = -1; state.readyAt = 0; setTimeout(showLoad, 0); }
       onMessage(m);
     };
-    setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'ping', ts: performance.now() })), 2000);
+    ws.pinger = setInterval(() => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'ping', ts: performance.now() })), 2000);
   });
 }
 const sendWs = (o) => state.ws && state.ws.readyState === 1 && state.ws.send(JSON.stringify(o));
@@ -132,7 +178,9 @@ function onMessage(m) {
       if (!state.laneRtt) noteRtt(performance.now() - m.ts);
       break;
     case 'net': state.roomRtt = m.maxRtt; updateLead(); break;
-    case 'error': toast(m.message, 6000); break;
+    case 'error':
+      if (!$('#lobby').hidden) lobbyError(m.message); else toast(m.message, 6000);
+      break;
     default:
   }
 }
@@ -155,44 +203,63 @@ function updateLead() {
 }
 
 // ------------------------------------------------------------------ lobby / room
+let entering = false;
 async function enter(action) {
-  localStorage.setItem('cdg.online.name', $('#name').value.trim());
+  if (entering) return;
+  entering = true;
+  lobbyError('');
+  store.set('name', $('#name').value.trim());
   try {
     if (!state.ws || state.ws.readyState !== 1) await connect();
+    // A name changed since the connection was opened.
+    else if (state.helloName !== myName()) { state.helloName = myName(); sendWs({ t: 'hello', name: state.helloName }); }
     sendWs(action);
-  } catch (e) { toast(e.message, 6000); }
+  } catch (e) { lobbyError(e.message); } finally { entering = false; }
 }
+const joinTyped = () => {
+  const code = cleanCode($('#code').value);
+  if (code.length !== 4) { lobbyError('Le code d’un salon fait 4 lettres.'); $('#code').focus(); return; }
+  enter({ t: 'join', code });
+};
 $('#btn-create').onclick = () => enter({ t: 'create' });
-$('#btn-join').onclick = () => enter({ t: 'join', code: $('#code').value });
-$('#code').onkeydown = (e) => { if (e.key === 'Enter') $('#btn-join').click(); };
+$('#btn-join').onclick = joinTyped;
+$('#btn-invite-join').onclick = () => enter({ t: 'join', code: invited });
+$('#code').oninput = () => { $('#code').value = cleanCode($('#code').value); };
+$('#code').onkeydown = (e) => { if (e.key === 'Enter') joinTyped(); };
+// Enter in the name field does what the page puts forward.
+$('#name').onkeydown = (e) => { if (e.key === 'Enter') (invited.length === 4 ? $('#btn-invite-join') : $('#btn-create')).click(); };
 $('#btn-copy').onclick = copyInvite;
 $('#btn-copy2').onclick = copyInvite;
 $('#btn-leave2').onclick = leave;
 $('#btn-leave').onclick = leave;
 $('#btn-start').onclick = () => sendWs({ t: 'start' });
-try { const a = localStorage.getItem('cdg.online.aspect'); if (a) $('#aspect').value = a; } catch { /* ignore */ }
-$('#aspect').onchange = () => { try { localStorage.setItem('cdg.online.aspect', $('#aspect').value); } catch { /* ignore */ } };
+{ const a = store.get('aspect'); if (a) $('#aspect').value = a; }
+$('#aspect').onchange = () => { store.set('aspect', $('#aspect').value); pictureHint(); };
 $('#mode').onchange = $('#cpus').onchange = () => sendWs({ t: 'mode', mode: $('#mode').value, cpus: +$('#cpus').value });
 
-// Open rooms, refreshed while the lobby is on screen.
+// Open rooms, refreshed while the lobby is on screen (redrawn only when the
+// list changes, so a button being reached with the keyboard stays in place).
+let roomsShown = '';
 async function refreshRooms() {
-  if ($('#lobby').hidden) return;
-  let list = [];
-  try { list = await (await fetch('/rooms', { cache: 'no-store' })).json(); } catch { return; }
+  if ($('#lobby').hidden || document.hidden) return;
+  let text = '[]';
+  try { text = await (await fetch('/rooms', { cache: 'no-store' })).text(); } catch { return; }
+  if (text === roomsShown) return;
+  let list;
+  try { list = JSON.parse(text); } catch { return; }
+  roomsShown = text;
   const ul = $('#room-list');
   ul.textContent = '';
   for (const x of list) {
-    const li = document.createElement('li');
-    const what = document.createElement('span');
-    what.className = 'what';
-    const b = document.createElement('b');
-    b.textContent = `${x.code} — salon de ${x.host}`;
-    const sm = document.createElement('small');
-    sm.textContent = `${x.mode === 'solo' ? 'Solo' : 'Multijoueur'} · ${x.players} joueur(s)` +
-      (x.state === 'running' ? ' · partie en cours' : ' · en attente');
-    what.append(b, sm);
-    const btn = document.createElement('button');
-    btn.textContent = 'Rejoindre';
+    const li = el('li');
+    const what = el('span', 'what');
+    const running = x.state === 'running';
+    const sm = el('small');
+    sm.append(el('span', `dot${running ? ' busy' : ''}`),
+      `${x.mode === 'solo' ? 'Solo' : 'Multijoueur'} · ${x.players} joueur${x.players > 1 ? 's' : ''} · ${running ? 'partie en cours' : 'en attente'}`);
+    what.append(el('b', '', `${x.code} — salon de ${x.host}`), sm);
+    const btn = el('button', '', running ? 'Regarder' : 'Rejoindre');
+    btn.type = 'button';
     btn.onclick = () => enter({ t: 'join', code: x.code });
     li.append(what, btn);
     ul.append(li);
@@ -200,8 +267,9 @@ async function refreshRooms() {
 }
 refreshRooms();
 setInterval(refreshRooms, 3000);
+document.addEventListener('visibilitychange', refreshRooms);
 $('#btn-end').onclick = () => sendWs({ t: 'end' });
-function leave() { stopGame(); sendWs({ t: 'leave' }); state.room = null; show('#lobby'); history.replaceState(null, '', location.pathname); }
+function leave() { stopGame(); sendWs({ t: 'leave' }); state.room = null; show('#lobby'); history.replaceState(null, '', location.pathname); roomsShown = ''; refreshRooms(); }
 
 // Internal rendering resolution: the software renderer draws the picture N
 // times finer than the PS1 (the game's own VRAM stays at 1x, so each player
@@ -210,8 +278,8 @@ function quality() {
   const q = +$('#quality').value;
   return Math.max(1, Math.min(4, Math.round(q) || 2));
 }
-try { const q = params.get('q') || localStorage.getItem('cdg.online.quality'); if (q) $('#quality').value = q; } catch { /* ignore */ }
-$('#quality').onchange = () => { try { localStorage.setItem('cdg.online.quality', $('#quality').value); } catch { /* ignore */ } };
+{ const q = params.get('q') || store.get('quality'); if (q) $('#quality').value = q; }
+$('#quality').onchange = () => { store.set('quality', $('#quality').value); pictureHint(); };
 
 // Picture drawn by the graphics card (WebGL 2) unless ?gpu=0 or unavailable.
 function gpuPicture() {
@@ -224,12 +292,22 @@ function chosenAspect() {
   if (v !== 'auto') { const [a, b] = v.split(':').map(Number); return a / b; }
   return Math.max(4 / 3, Math.min(32 / 9, innerWidth / innerHeight));
 }
+// What the two picture choices amount to on this screen.
+function pictureHint() {
+  const a = aspectRatioText(chosenAspect()), q = quality();
+  const [x, y] = a.split(':').map(Number);
+  $('#aspect').options[0].textContent = `Celui de mon écran (${aspectRatioText(Math.max(4 / 3, Math.min(32 / 9, innerWidth / innerHeight)))})`;
+  $('#picture-hint').textContent = `Image calculée en ${Math.round(240 * q * x / y)} × ${240 * q} points (${a}, ${q}×).` +
+    (q >= 3 && !gpuPicture() ? ' Sans carte graphique utilisable par le navigateur, préférez 1× ou 2×.' : '');
+}
+addEventListener('resize', () => { if (!$('#room').hidden) pictureHint(); });
 
 function onRoom(m) {
   if (!m.code) { state.room = null; return; }
   state.room = m;
   for (const x of m.members) state.names.set(x.id, x.name);
   const isHost = m.host === state.id;
+  const lobbyState = m.state === 'lobby';
   document.body.classList.toggle('is-host', isHost);
   $('#room-code').textContent = m.code;
   $('#room-code2').textContent = m.code;
@@ -237,45 +315,66 @@ function onRoom(m) {
   if (m.mode) $('#mode').value = m.mode;
   $('#cpus').value = String(m.cpus | 0);
   $('#cpus-label').hidden = m.mode === 'solo';
-  const players = m.members.filter((x) => x.seat >= 0).length;
-  $('#mode-line').textContent = m.mode === 'solo'
+  const seated = m.members.filter((x) => x.seat >= 0);
+  const players = seated.length;
+  const hostName = (m.members.find((x) => x.id === m.host) || {}).name || '?';
+  $('#mode-line').textContent = isHost ? '' : (m.mode === 'solo'
     ? 'Mode : Solo — campagne « Un joueur » ; l’hôte joue, les autres regardent.'
-    : `Mode : Multijoueur — ${players} équipe(s) de joueurs` + ((m.cpus | 0) ? ` et ${m.cpus} de l’ordinateur` : '') +
-      ' ; chaque joueur règle et commande son équipe.' + (players + (m.cpus | 0) > 4 ? ' (4 équipes au plus : les dernières sont ignorées.)' : '');
+    : `Mode : Multijoueur — ${players} équipe${players > 1 ? 's' : ''} de joueurs` + ((m.cpus | 0) ? ` et ${m.cpus} de l’ordinateur` : '') +
+      ' ; chaque joueur règle et commande son équipe.');
   // Seats
   const seats = $('#seats');
   seats.textContent = '';
   for (let s = 0; s < 4; s++) {
     const who = m.members.find((x) => x.seat === s);
-    const li = document.createElement('li');
-    li.className = (who ? '' : 'empty') + (who && who.id === state.id ? ' me' : '');
-    const label = document.createElement('span');
-    label.className = 'who';
-    label.textContent = `Joueur ${s + 1} : ${who ? who.name + (who.id === m.host ? ' (hôte)' : '') : 'libre'}` +
-      (who && m.state === 'lobby' && who.ready >= 0 ? (who.ready >= 100 ? ' — prêt' : ` — préchargement ${who.ready} %`) : '');
-    li.append(label);
-    if (!who && m.state === 'lobby') {
-      const b = document.createElement('button');
-      b.textContent = 'Prendre';
-      b.onclick = () => sendWs({ t: 'seat', seat: s });
+    const mine = who && who.id === state.id;
+    const li = el('li', (who ? '' : 'empty') + (mine ? ' me' : ''));
+    const label = el('span', 'who');
+    const name = el('b', '', who ? who.name : 'Place libre');
+    if (who && who.id === m.host) name.append(el('span', 'tag host', 'hôte'));
+    if (mine) name.append(el('span', 'tag', 'vous'));
+    label.append(name);
+    if (who && lobbyState && who.ready >= 0) {
+      label.append(el('small', who.ready >= 100 ? 'ready' : '', who.ready >= 100 ? 'Prêt' : `Préchargement ${who.ready} %`));
+      const prog = el('i', `prog${who.ready >= 100 ? ' full' : ''}`);
+      prog.style.width = `${who.ready}%`;
+      li.append(prog);
+    } else if (!who) label.append(el('small', '', lobbyState ? 'En attente d’un joueur' : ''));
+    li.append(el('span', 'badge', `J${s + 1}`), label);
+    if (lobbyState && (!who || mine)) {
+      const b = el('button', mine ? 'link' : '', mine ? 'Regarder seulement' : 'Prendre');
+      b.type = 'button';
+      b.onclick = () => sendWs({ t: 'seat', seat: mine ? -1 : s });
       li.append(b);
     }
     seats.append(li);
   }
+  $('#seat-count').textContent = `${players} / 4`;
   const watchers = m.members.filter((x) => x.seat < 0);
-  $('#room-wait').textContent = m.state === 'running'
-    ? 'Une partie est en cours : vous jouerez à la prochaine.'
-    : (watchers.length ? `Spectateurs : ${watchers.map((x) => x.name).join(', ')}` : '');
+  $('#spectators').textContent = watchers.length
+    ? `Spectateur${watchers.length > 1 ? 's' : ''} : ${watchers.map((x) => x.name + (x.id === state.id ? ' (vous)' : '')).join(', ')}` : '';
+  // Start: the host's button, everyone else's waiting line.
+  const late = seated.filter((x) => x.ready >= 0 && x.ready < 100);
+  $('#btn-start').disabled = !players || !lobbyState;
+  $('#start-hint').textContent = !players ? 'Il faut au moins un joueur assis à une place.'
+    : m.mode === 'solo' ? 'Solo : vous jouez la campagne, les autres regardent.'
+      : (players + (m.cpus | 0) < 2 ? 'Une seule équipe : ajoutez une équipe de l’ordinateur ou invitez un ami. '
+        : players + (m.cpus | 0) > 4 ? 'Quatre équipes au plus : les dernières seront ignorées. ' : '') +
+        (late.length ? `${late.map((x) => `${x.name} (${x.ready} %)`).join(', ')} précharge${late.length > 1 ? 'nt' : ''} encore : vous pouvez lancer, la suite arrivera pendant la partie.`
+          : 'Tout le monde est prêt.');
+  $('#room-wait').textContent = !lobbyState ? 'Une partie est en cours : vous jouerez à la prochaine.'
+    : isHost ? '' : `En attente de ${hostName}, qui lance la partie.`;
   // Members panel (in game)
   const ul = $('#members');
   ul.textContent = '';
   for (const x of m.members) {
-    const li = document.createElement('li');
-    li.textContent = `${x.seat >= 0 ? `Joueur ${x.seat + 1}` : 'Spectateur'} — ${x.name}${x.id === m.host ? ' (hôte)' : ''}` +
-      (x.rtt ? ` · ${x.rtt} ms` : '');
-    ul.append(li);
+    ul.append(el('li', '', `${x.seat >= 0 ? `Joueur ${x.seat + 1}` : 'Spectateur'} — ${x.name}${x.id === m.host ? ' (hôte)' : ''}` +
+      (x.rtt ? ` · ${x.rtt} ms` : '')));
   }
-  if (!state.game) show('#room');
+  if (!state.game) {
+    if ($('#room').hidden) { show('#room'); scrollTo(0, 0); }
+    pictureHint();
+  }
 }
 
 // ------------------------------------------------------------------ game
@@ -510,8 +609,18 @@ function revealWhenReady(Module, go) {
   check();
 }
 
+// Which participant this page is (none: it watches every turn), so that the
+// game paces its own turns by itself and smooths the others' (?playout=0:
+// the others' turns played as their inputs arrive, for comparisons).
+function tellWho(Module) {
+  if (!Module._psx_web_lockstep_set_me) return;
+  Module._psx_web_lockstep_set_me(state.players.indexOf(state.id) >>> 0);
+  Module._psx_web_lockstep_set_playout(params.get('playout') === '0' ? 0 : 1);
+}
+
 async function attach(Module, go) {
   const memory = Module.wasmMemory;
+  tellWho(Module);
   // Lockstep worker: writes every participant's inputs into the game's ring.
   const w = new Worker('js/net-worker.js', { type: 'module' });
   state.worker = w;
@@ -523,6 +632,7 @@ async function attach(Module, go) {
     else if (m.t === 'log') console.log('[lockstep]', m.text);
     else if (m.t === 'resync-ready' && state.resyncBlob) {
       console.log(`[partie] rechargement de l’instantané à l’image ${m.start}`);
+      tellWho(Module);
       stageSnapshot(Module, state.resyncBlob, m.start, state.players.length);
       state.resyncBlob = null;
     }
@@ -586,7 +696,17 @@ async function attach(Module, go) {
 
 function canvas_focus() { $('#canvas').focus(); }
 
+// Game speed as this player gets it, shown next to the ping: frames of the
+// game per second (50 is the game's own pace) over the last second or two.
+const speed = { at: 0, frame: 0, fps: 0 };
 function onStats(m) {
+  const now = performance.now();
+  if (m.frame < speed.frame || !speed.at) { speed.at = now; speed.frame = m.frame; }
+  else if (now - speed.at >= 1000) {
+    speed.fps = (m.frame - speed.frame) * 1000 / (now - speed.at);
+    speed.at = now; speed.frame = m.frame;
+    perfNote(speed.fps);
+  }
   state.lastStats = m;
   const holder = m.holder >= 0 ? state.names.get(state.players[m.holder]) : null;
   const mine = m.holder >= 0 && state.players[m.holder] === state.id;
@@ -599,7 +719,33 @@ function onStats(m) {
       : (holder ? `${holder} a la main` : '');
   $('#turn').classList.toggle('mine', !!(team && mine));
   const waiting = m.waiting.length ? ` · attente de ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
-  $('#stats').textContent = `image ${m.frame}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${m.lead ? ` · avance ${m.lead} images` : ''}${waiting}`;
+  $('#stats').textContent = `image ${m.frame}${speed.fps ? ` · ${Math.round(speed.fps)} img/s` : ''}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;
+}
+
+// Every half minute of game, what this player's machine achieved goes to the
+// server's log (numbers only): game frames per second (average and worst
+// second), drawing cost per screen refresh, network waits, and how evenly
+// the frames followed one another. This is how a slow machine or a rough
+// link shows up without anyone having to describe it.
+const perf = { n: 0, sum: 0, min: Infinity, since: 0, wait: 0, even: null };
+function perfNote(fps) {
+  const m = state.lastStats;
+  if (!state.worker || !m) return;
+  if (!perf.n) { perf.since = performance.now(); perf.wait = m.waitMs; perf.even = m.even; }
+  perf.n++; perf.sum += fps; perf.min = Math.min(perf.min, fps);
+  if (performance.now() - perf.since < 30000) return;
+  const e0 = perf.even || {}, e1 = m.even || {};
+  const d = {
+    fps: +(perf.sum / perf.n).toFixed(1), fpsMin: +perf.min.toFixed(1), seconds: perf.n,
+    waitMs: m.waitMs - perf.wait, mine: m.holder >= 0 && state.players[m.holder] === state.id,
+    frames: (e1.n || 0) - (e0.n || 0), late: (e1.late || 0) - (e0.late || 0), hitch: (e1.hitch || 0) - (e0.hitch || 0), gapMaxMs: e1.maxMs || 0,
+    play: m.play, hidden: document.hidden,
+    ...(state.display && state.display.takePerf ? state.display.takePerf() : {}),
+  };
+  perf.n = 0; perf.sum = 0; perf.min = Infinity;
+  state.lastPerf = d;
+  state.worker.postMessage({ t: 'diag', kind: 'perf', extra: d });
+  state.worker.postMessage({ t: 'gap-reset' });
 }
 
 function stopGame() {
@@ -641,24 +787,30 @@ $('#btn-full').onclick = toggleFull;
 $('#btn-panel').onclick = () => { $('#panel').hidden = !$('#panel').hidden; };
 $('#btn-panel-close').onclick = () => { $('#panel').hidden = true; $('#canvas').focus(); };
 
+// One discussion for the room, shown in the lobby and in the game's panel.
 function chatLine(name, text) {
-  const d = document.createElement('div');
-  const b = document.createElement('b');
-  b.textContent = `${name} : `;
-  d.append(b, document.createTextNode(text));
-  $('#chat-log').append(d);
-  $('#chat-log').scrollTop = 1e9;
-  if ($('#panel').hidden) toast(`${name} : ${text}`);
+  for (const log of [$('#chat-log'), $('#room-chat-log')]) {
+    const d = el('div');
+    d.append(el('b', '', `${name} : `), document.createTextNode(text));
+    log.append(d);
+    while (log.childElementCount > 200) log.firstElementChild.remove();
+    log.scrollTop = 1e9;
+  }
+  if (state.game && $('#panel').hidden) toast(`${name} : ${text}`);
 }
-$('#chat-form').onsubmit = (e) => {
-  e.preventDefault();
-  const text = $('#chat-input').value.trim();
-  if (!text) return;
-  sendWs({ t: 'chat', text });
-  chatLine('Moi', text);
-  $('#chat-input').value = '';
-  $('#chat-input').blur();
-};
+function chatForm(form, field, after) {
+  $(form).onsubmit = (e) => {
+    e.preventDefault();
+    const text = $(field).value.trim();
+    if (!text) return;
+    sendWs({ t: 'chat', text });
+    chatLine('Moi', text);
+    $(field).value = '';
+    after();
+  };
+}
+chatForm('#chat-form', '#chat-input', () => $('#chat-input').blur());
+chatForm('#room-chat-form', '#room-chat-input', () => {});
 
 // Key remapping dialog
 $('#btn-keys').onclick = () => { renderKeys(); $('#dlg-keys').showModal(); };

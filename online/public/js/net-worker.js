@@ -164,10 +164,14 @@ function loop() {
   if (now - statsAt > 500) {
     statsAt = now;
     const status = mem.status >> 2;
+    const st = (i) => Atomics.load(mem.u32, status + i);
     postMessage({
-      t: 'stats', frame: Atomics.load(mem.u32, status), waitMs: Atomics.load(mem.u32, status + 3),
-      holder: Atomics.load(mem.u32, status + 4) - 1, team: Atomics.load(mem.u32, status + 5), waiting: waitingFor(),
-      lead: ls.lead,
+      t: 'stats', frame: st(0), waitMs: st(3), holder: st(4) - 1, team: st(5), waiting: waitingFor(), lead: ls.lead,
+      // Watching another player (psx_lockstep_web.c): words in hand, level
+      // aimed at, times they ran out, pace; then how evenly frames follow
+      // one another (frames timed, late ones, very late ones, longest gap).
+      play: { low: st(8), level: st(9), dry: st(10), pace: st(11) },
+      even: { n: st(12), late: st(13), hitch: st(14), maxMs: st(15) },
     });
   }
 }
@@ -211,6 +215,10 @@ function handle(m) {
       break;
     case 'beat':
       pageBeat = performance.now(); pageInfo = m.info;
+      break;
+    case 'gap-reset':
+      // The page has reported the longest gap between two frames: count anew.
+      if (mem) { views(); Atomics.store(mem.u32, (mem.status >> 2) + 15, 0); }
       break;
     case 'diag':
       if (mem) sendDiag(m.kind, m.extra || {});

@@ -5,87 +5,165 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Cochons de Guerre — en ligne</title>
   <meta name="description" content="Cochons de Guerre (2000), version française, recompilée en WebAssembly : chaque joueur fait tourner le jeu dans son navigateur, multijoueur en ligne.">
+  <meta name="theme-color" content="#17120d">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
-  <link rel="stylesheet" href="css/online.css">
+  <link rel="modulepreload" href="js/app.js">
+  <link rel="modulepreload" href="js/input.js">
+  <link rel="modulepreload" href="js/display.js">
 </head>
 <body>
-  <section id="lobby">
-    <div class="card">
-      <h1><img src="favicon.svg" alt="" width="40" height="40"> Cochons de Guerre <small>en ligne</small></h1>
-      <p class="lead">Le jeu est fourni par le serveur et tourne dans votre navigateur (WebAssembly) : rien à
-        installer, pas de disque à fournir. Chaque joueur a sa propre copie de la partie, synchronisée en ligne
-        avec celle des autres.</p>
-      <div id="invite" class="invite" hidden>Invitation au salon <b id="invite-code"></b> : entrez votre nom puis « Rejoindre ».</div>
-      <label>Votre nom <input id="name" maxlength="24" placeholder="Cochon" autocomplete="nickname"></label>
-      <div class="row">
-        <div class="col">
-          <h2>Nouvelle partie</h2>
-          <button id="btn-create" class="primary">Créer un salon</button>
-        </div>
-        <div class="col">
-          <h2>Rejoindre des amis</h2>
-          <label for="code" class="small">Code du salon (4 lettres, donné par l’hôte)</label>
-          <div class="join">
-            <input id="code" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off">
-            <button id="btn-join">Rejoindre</button>
-          </div>
-          <h2 style="margin-top:14px">Salons ouverts</h2>
-          <ul id="room-list" class="room-list"></ul>
-        </div>
+  <!-- ============================================================ accueil -->
+  <section id="lobby" class="page">
+    <header class="masthead">
+      <img src="favicon.svg" alt="" width="64" height="64">
+      <div>
+        <h1>Cochons de Guerre <small>en ligne</small></h1>
+        <p class="lead">Le jeu de 2000 tourne dans votre navigateur : rien à installer, pas de disque à fournir.
+          Jusqu’à 4 joueurs, chacun sur son écran.</p>
       </div>
-      <p id="preload" class="muted small"></p>
-      <details class="help">
-        <summary>Commandes</summary>
-        <p><b>Z Q S D</b> ou flèches : déplacement · <b>Espace</b> : Croix (valider, tirer) · <b>Retour arrière</b> : Rond (retour) ·
-          <b>F</b> : Carré · <b>R</b> : Triangle · <b>A / E</b> : L1 / R1 · <b>W / C</b> : L2 / R2 · <b>Entrée</b> ou <b>Échap</b> : Start (pause) ·
-          <b>Tab</b> : Select. F1 : panneau du salon · T : discuter · F11 : plein écran. Touches modifiables, manettes reconnues.</p>
-      </details>
+    </header>
+
+    <p id="lobby-error" class="notice error" role="alert" hidden></p>
+
+    <div id="invite" class="notice invite" hidden>
+      <div>
+        <strong>Vous êtes invité dans le salon <b id="invite-code" class="code"></b></strong>
+        <span class="muted">Choisissez votre nom, puis rejoignez vos amis.</span>
+      </div>
+      <button id="btn-invite-join" class="primary" type="button">Rejoindre le salon</button>
     </div>
-    <footer>Projet de fan non officiel et non commercial. <i>Hogs of War / Cochons de Guerre</i> © leurs ayants droit.</footer>
+
+    <div class="card identity">
+      <label for="name">Votre nom de joueur</label>
+      <input id="name" maxlength="24" placeholder="Cochon" autocomplete="nickname" spellcheck="false" enterkeyhint="go">
+    </div>
+
+    <div class="row">
+      <div class="card col">
+        <h2>Nouvelle partie</h2>
+        <p class="muted">Ouvrez un salon, puis envoyez le lien d’invitation à vos amis.</p>
+        <button id="btn-create" class="primary big" type="button">Créer un salon</button>
+      </div>
+      <div class="card col">
+        <h2>Rejoindre des amis</h2>
+        <label for="code" class="muted">Code du salon — 4 lettres données par l’hôte</label>
+        <div class="join">
+          <input id="code" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off"
+            spellcheck="false" inputmode="text" enterkeyhint="go" aria-describedby="code-help">
+          <button id="btn-join" type="button">Rejoindre</button>
+        </div>
+        <h3 id="code-help">Salons ouverts</h3>
+        <ul id="room-list" class="room-list" aria-live="polite"></ul>
+      </div>
+    </div>
+
+    <div class="card loadline" aria-live="polite">
+      <div class="bar" aria-hidden="true"><i id="preload-bar"></i></div>
+      <p id="preload" class="muted small"></p>
+    </div>
+
+    <details class="card help">
+      <summary>Commandes au clavier et à la manette</summary>
+      <dl class="keys">
+        <div><dt><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> ou <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></dt><dd>Se déplacer, viser</dd></div>
+        <div><dt><kbd>Espace</kbd></dt><dd>Valider, tirer (Croix)</dd></div>
+        <div><dt><kbd>Retour arr.</kbd></dt><dd>Menu des armes, retour (Rond)</dd></div>
+        <div><dt><kbd>F</kbd></dt><dd>Sauter (Carré)</dd></div>
+        <div><dt><kbd>R</kbd></dt><dd>Annuler (Triangle)</dd></div>
+        <div><dt><kbd>A</kbd> <kbd>W</kbd></dt><dd>Caméra (L1, L2)</dd></div>
+        <div><dt><kbd>E</kbd> <kbd>C</kbd></dt><dd>Viser plus haut, plus bas (R1, R2)</dd></div>
+        <div><dt><kbd>Entrée</kbd> ou <kbd>Échap</kbd></dt><dd>Pause (Start)</dd></div>
+        <div><dt><kbd>F1</kbd></dt><dd>Panneau du salon</dd></div>
+        <div><dt><kbd>T</kbd></dt><dd>Discuter</dd></div>
+        <div><dt><kbd>F11</kbd></dt><dd>Plein écran</dd></div>
+      </dl>
+      <p class="muted small">Les touches se changent dans le panneau du salon, pendant la partie. Les manettes sont reconnues
+        dès qu’un bouton est pressé.</p>
+    </details>
+
+    <footer>Projet de fan non officiel et non commercial. <i>Hogs of War / Cochons de Guerre</i> © leurs ayants droit.
+      <span id="build" class="build"></span></footer>
   </section>
 
-  <section id="room" hidden>
-    <div class="card">
-      <h1>Salon <b id="room-code2"></b></h1>
-      <p><button id="btn-copy2">Copier le lien d’invitation</button></p>
-      <h2>Places</h2>
-      <ol id="seats" class="seats"></ol>
-      <p id="preload2" class="muted small"></p>
-      <p class="muted small">Dans le jeu : <b>MULTIJOUEUR</b>, puis une équipe <b>JOUEUR</b> par place, dans l’ordre
-        des places (Joueur 1, Joueur 2…). Pendant la bataille, seule l’équipe dont c’est le tour obéit à son joueur.</p>
-      <label>Format d’image (le vôtre : chaque joueur choisit le sien)
+  <!-- ============================================================== salon -->
+  <section id="room" class="page" hidden>
+    <header class="roomhead">
+      <div>
+        <p class="eyebrow">Salon</p>
+        <h1><b id="room-code2" class="code"></b></h1>
+      </div>
+      <div class="roomhead-actions">
+        <button id="btn-copy2" type="button" class="primary">Copier le lien d’invitation</button>
+        <button id="btn-leave2" type="button" class="danger">Quitter</button>
+      </div>
+    </header>
+    <p id="room-banner" class="notice" hidden></p>
+
+    <div class="room-grid">
+      <div class="card">
+        <h2>Joueurs <span id="seat-count" class="count"></span></h2>
+        <ol id="seats" class="seats"></ol>
+        <p id="spectators" class="muted small"></p>
+        <p id="mode-line" class="muted small"></p>
+
+        <h2 class="spaced">Discussion</h2>
+        <div id="room-chat-log" class="chat" aria-live="polite"></div>
+        <form id="room-chat-form" class="chat-form">
+          <input id="room-chat-input" maxlength="300" placeholder="Écrire aux autres joueurs…" aria-label="Message" autocomplete="off">
+          <button>Envoyer</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="host-only">
+          <h2>Partie</h2>
+          <label for="mode">Mode de jeu</label>
+          <select id="mode">
+            <option value="multi" selected>Multijoueur — les joueurs s’affrontent</option>
+            <option value="solo">Solo — la campagne (l’hôte joue, les autres regardent)</option>
+          </select>
+          <div id="cpus-label">
+            <label for="cpus">Équipes de l’ordinateur, en plus des joueurs</label>
+            <select id="cpus">
+              <option value="0">Aucune</option><option value="1" selected>1</option>
+              <option value="2">2</option><option value="3">3</option>
+            </select>
+          </div>
+        </div>
+
+        <h2 class="spaced-host">Votre image</h2>
+        <p class="muted small">Chaque joueur choisit pour lui-même : cela ne change rien pour les autres.</p>
+        <label for="aspect">Format</label>
         <select id="aspect">
           <option value="auto" selected>Celui de mon écran</option>
           <option value="4:3">4:3</option><option value="16:9">16:9</option><option value="16:10">16:10</option>
           <option value="21:9">21:9</option><option value="32:9">32:9</option>
-        </select></label>
-      <label>Qualité d’image (sur votre PC uniquement)
+        </select>
+        <label for="quality">Qualité</label>
         <select id="quality">
-          <option value="1">Rapide — définition d’origine (PC modestes)</option>
-          <option value="2" selected>Nette — 2× la définition</option>
-          <option value="3">Très nette — 3×</option>
-          <option value="4">Maximale — 4× (PC puissant)</option>
-        </select></label>
-      <p id="mode-line" class="small"></p>
-      <div class="host-only">
-        <label>Mode de jeu
-          <select id="mode">
-            <option value="multi" selected>Multijoueur — bataille entre les joueurs du salon</option>
-            <option value="solo">Solo — campagne « Un joueur » (l’hôte joue, les autres regardent)</option>
-          </select></label>
-        <label id="cpus-label">Équipes de l’ordinateur (en plus des joueurs)
-          <select id="cpus">
-            <option value="0">Aucune</option><option value="1" selected>1</option>
-            <option value="2">2</option><option value="3">3</option>
-          </select></label>
-        <button id="btn-start" class="primary">Lancer la partie</button>
+          <option value="1">1× — définition d’origine (PC modestes)</option>
+          <option value="2" selected>2× — nette</option>
+          <option value="3">3× — très nette</option>
+          <option value="4">4× — maximale (PC puissant)</option>
+        </select>
+        <p id="picture-hint" class="muted small"></p>
+
+        <div class="loadline" aria-live="polite">
+          <div class="bar" aria-hidden="true"><i id="preload-bar2"></i></div>
+          <p id="preload2" class="muted small"></p>
+        </div>
+
+        <div class="launch">
+          <button id="btn-start" class="primary big host-only" type="button">Lancer la partie</button>
+          <p id="start-hint" class="muted small host-only"></p>
+          <p id="room-wait" class="waitline"></p>
+        </div>
       </div>
-      <p id="room-wait" class="muted"></p>
-      <p><button id="btn-leave2" class="danger">Quitter</button></p>
     </div>
   </section>
 
+  <!-- ================================================================ jeu -->
   <section id="play" hidden>
     <canvas id="canvas" aria-label="Image du jeu" tabindex="-1"></canvas>
     <canvas id="sdl" hidden></canvas>
@@ -109,12 +187,13 @@
       </div>
       <div id="chat-log" class="chat" aria-live="polite"></div>
       <form id="chat-form" class="chat-form">
-        <input id="chat-input" maxlength="300" placeholder="Message (T)" aria-label="Message">
+        <input id="chat-input" maxlength="300" placeholder="Message (T)" aria-label="Message" autocomplete="off">
         <button>Envoyer</button>
       </form>
     </aside>
-    <div id="toasts" aria-live="polite"></div>
   </section>
+
+  <div id="toasts" aria-live="polite"></div>
 
   <dialog id="dlg-keys">
     <form method="dialog">
