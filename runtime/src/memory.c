@@ -2211,13 +2211,48 @@ static inline int psx_cyc_main_ram_fast_addr(uint32_t addr, uint32_t width,
 }
 #endif
 
+/* Production value read for a scratchpad load, the second most common load
+ * after main RAM (games keep their working vertices there). Timing has run
+ * already. psx_read_word / psx_read_half reach the scratchpad after testing
+ * every region mapped below it, none of which can contain these addresses
+ * (main RAM and the GPU-DMA aperture end at 0x01000000, mod memory and
+ * Expansion 1 at 0x1F800000), and return the same little-endian bytes. KSEG2,
+ * the lockstep hooks and data-shard capture keep the full path, as does an
+ * access that would run past the last byte. */
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
+static inline int psx_cyc_scratchpad_fast_addr(uint32_t addr, uint32_t width,
+                                               uint32_t *off_out) {
+    if (g_ls_mode != 0 || g_ds_recording || addr >= 0xC0000000u) return 0;
+    uint32_t off = (addr & 0x1FFFFFFFu) - 0x1F800000u;
+    if (off > SCRATCHPAD_SIZE - width) return 0;
+    *off_out = off;
+    return 1;
+}
+#endif
+
 /* Slow paths for the inlined helpers in psx_cyc.h (MMIO / lockstep / shards). */
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
+    uint32_t off;
+    if (psx_cyc_scratchpad_fast_addr(addr, 4u, &off)) {
+        uint32_t v;
+        memcpy(&v, &scratchpad[off], sizeof(v));
+        return v;
+    }
+#endif
     return psx_read_word(addr);
 }
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask);
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
+    uint32_t off;
+    if (psx_cyc_scratchpad_fast_addr(addr, 2u, &off)) {
+        uint16_t v;
+        memcpy(&v, &scratchpad[off], sizeof(v));
+        return v;
+    }
+#endif
     return psx_read_half(addr);
 }
 void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
