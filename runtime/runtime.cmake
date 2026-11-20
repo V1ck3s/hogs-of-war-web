@@ -1798,7 +1798,9 @@ function(psxrecomp_add_runtime_target target)
             "--js-library=${PSXRECOMP_ROOT}/runtime/src/web_stdio.js"
             "-sMIN_WEBGL_VERSION=2"
             "-sMAX_WEBGL_VERSION=2"
-            "-sPTHREAD_POOL_SIZE=3"
+            # Emulation, presentation or native rasterizer (gpu_sw_threaded.c)
+            # and one to spare: none of them waits for the page to make a worker.
+            "-sPTHREAD_POOL_SIZE=4"
             "-sALLOW_MEMORY_GROWTH=1"
             "-sINITIAL_MEMORY=402653184"
             "-sMAXIMUM_MEMORY=1073741824"

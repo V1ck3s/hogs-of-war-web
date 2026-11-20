@@ -112,6 +112,13 @@ void gr_set_draw_offset(int x, int y);
 int  gr_wide_supported(void);
 /* The CPU VRAM array was replaced wholesale (savestate load). */
 void gr_vram_restored(void);
+/* A backend may rasterize into the CPU VRAM array on a thread of its own
+ * (browser: gpu_sw_threaded.c). Code that reads or writes that array without
+ * going through gr_* calls this first: it returns once the backend has run
+ * every call made so far, and nothing else draws until the next gr_* call.
+ * Free when the backend draws on the calling thread (g_gr_vram_sync NULL). */
+extern void (*g_gr_vram_sync)(void);
+static inline void gr_vram_sync(void) { if (g_gr_vram_sync) g_gr_vram_sync(); }
 void gr_wide_configure(int wide_w, int offset);
 void gr_wide_set_target(int base_x);
 void gr_wide_disable_target(void);
@@ -204,6 +211,9 @@ typedef struct GpuRenderBackend {
     /* Optional: the CPU VRAM array was replaced wholesale (savestate load);
      * backends keeping their own copy resynchronize from it. */
     void (*vram_restored)(void);
+    /* Optional: see gr_vram_sync. NULL when the backend draws into the CPU
+     * VRAM array on the calling thread only. */
+    void (*vram_sync)(void);
 } GpuRenderBackend;
 
 #ifdef __cplusplus

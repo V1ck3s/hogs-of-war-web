@@ -55,7 +55,11 @@ extern uint8_t  psx_read_byte(uint32_t addr);
 extern uint32_t psx_read_word(uint32_t addr);
 
 /* ---- VRAM ---- */
-static uint16_t vram[1024 * 512];
+static uint16_t vram_mem[1024 * 512];
+/* Every direct use of the array in this file goes through this name: a
+ * backend that rasterizes on a thread of its own must have run everything
+ * queued before the array is read or written here (gr_vram_sync). */
+#define vram (gr_vram_sync(), vram_mem)
 
 /* ---- GP0 state machine ---- */
 
@@ -3178,7 +3182,7 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 static void gpu_reset_state(int clear_vram) {
     ws_reset_scene_history();
     if (clear_vram) {
-        memset(vram, 0, sizeof(vram));
+        memset(vram, 0, sizeof(vram_mem));
         gpu_vram_dirty_mark_all();
     }
     gr_init(vram);
@@ -6699,4 +6703,4 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     return 1;
 }
 uint16_t* gpu_get_vram_ptr(void){ return vram; }
-uint32_t  gpu_get_vram_bytes(void){ return (uint32_t)sizeof(vram); }
+uint32_t  gpu_get_vram_bytes(void){ return (uint32_t)sizeof(vram_mem); }

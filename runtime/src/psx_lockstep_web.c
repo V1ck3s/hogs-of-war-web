@@ -24,6 +24,7 @@
  * which frame never changes. */
 #include "psx_lockstep.h"
 #include "psx_lockstep_playout.h"
+#include "crc32.h"
 #include "mod_plugins.h"
 
 #include <emscripten/emscripten.h>
@@ -45,6 +46,23 @@ static volatile uint32_t s_tag[RING][MAXP];
 static volatile uint16_t s_words[RING][STRIDE];
 static volatile uint32_t s_gone_after[MAXP] = { PRESENT, PRESENT, PRESENT, PRESENT };
 static volatile uint32_t s_nplayers = 1;
+/* Tests only (PSX_WEB_VRAM_DIGEST=1): a CRC of the authoritative VRAM at
+ * the frames of the game digest, to compare two ways of drawing it (the
+ * rasterizer on the emulation thread or on its own, gpu_sw_threaded.c). It is
+ * not part of the digest the participants compare: a megabyte to hash, and
+ * VRAM only reaches the game through what it reads back, which the RAM
+ * digest already covers. */
+#define VRAM_DIGESTS 2048u
+static uint32_t s_vram_digests[VRAM_DIGESTS];
+static void vram_digest_note(uint32_t frame) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("PSX_WEB_VRAM_DIGEST"); on = e && e[0] == '1'; }
+    if (!on || frame / 120u >= VRAM_DIGESTS) return;
+    extern const uint16_t *gpu_get_vram(void);
+    const uint32_t c = crc32_compute((const uint8_t *)gpu_get_vram(), 1024u * 512u * 2u);
+    s_vram_digests[frame / 120u] = c ? c : 1u;
+}
+
 /* Status block read by JS: cur_frame, digest_frame, digest, wait_ms_total,
  * holder+1 (0 = nobody), [5] team shown, [6] digest seqlock, [7] participant
  * waited for + 1 (0 = none); watching: [8] words in hand (low point of the
@@ -230,6 +248,7 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
         /* Seqlock for the JS reader: [1] frame, [2] digest, [6] frame again;
          * a read is consistent when [1] == [6]. */
         const uint32_t d = psx_lockstep_ram_digest();
+        vram_digest_note(frame);
         s_status[6] = 0xFFFFFFFFu;
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         s_last_digest_frame = frame;
@@ -248,6 +267,9 @@ loading:
 }
 
 EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_set_host(uint32_t index) { s_host = index; }
+EMSCRIPTEN_KEEPALIVE uint32_t psx_web_vram_digest(uint32_t frame) {
+    return frame % 120u == 0u && frame / 120u < VRAM_DIGESTS ? s_vram_digests[frame / 120u] : 0u;
+}
 EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_enable(uint32_t nplayers) {
     /* No ring reset: the page's lockstep worker may already have published
      * the first frames (the ring starts zeroed with the module). */

@@ -31,6 +31,18 @@
  * straight onto a canvas. The emulation thread never waits for it: when the
  * ring is full (page hidden, no refresh) records are dropped, and once the
  * page has caught up the whole VRAM and drawing state are sent again.
+ *
+ * Native rasterizer thread (PSX_WEB_RASTER_THREAD=1, set by the page): the
+ * native rasterizer itself leaves the emulation thread. Its calls go, in
+ * order, through a second ring that never drops anything, to a thread that
+ * owns the rasterizer; the game no longer waits for its own picture to be
+ * drawn at 1x. Whatever READS the authoritative VRAM first waits until that
+ * thread has run everything queued (native_sync): VRAM->CPU transfers,
+ * single-pixel reads, the native read-out, a GPU-mode resync, a CPU->VRAM
+ * transfer, a savestate, and gpu.c's own direct accesses (gr_vram_sync). The
+ * rasterizer therefore sees exactly the calls it saw on the emulation thread,
+ * in the same order, and every read sees all of them done: what the game
+ * reads back does not depend on how fast that thread is.
  */
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
@@ -174,7 +186,7 @@ static void *rec_begin(uint32_t op, uint32_t payload) {
         w->op = OP_WRAP; w->bytes = contig;
         head += contig;
         atomic_store(&s_head, head);
-        if (atomic_load(&s_cons_sleep)) {
+        if (atomic_load(&s_cons_sleep) && atomic_exchange(&s_cons_sleep, 0)) {
             pthread_mutex_lock(&s_mu); pthread_cond_signal(&s_cv_data); pthread_mutex_unlock(&s_mu);
         }
         pos = 0;
@@ -189,7 +201,9 @@ static void *rec_begin(uint32_t op, uint32_t payload) {
 
 static void rec_commit(void) {
     atomic_store(&s_head, rec_reserve_pos + rec_reserve_size);
-    if (atomic_load(&s_cons_sleep)) {
+    /* The flag is taken, not just read: one signal per sleep of the consumer,
+     * not one per record written while it wakes up. */
+    if (atomic_load(&s_cons_sleep) && atomic_exchange(&s_cons_sleep, 0)) {
         pthread_mutex_lock(&s_mu); pthread_cond_signal(&s_cv_data); pthread_mutex_unlock(&s_mu);
     }
 }
@@ -523,6 +537,181 @@ static void drain(void) {
     }
 }
 
+/* ---- native rasterizer: on the emulation thread or on its own ------------ */
+/* One native call, from its recorded form (the same opcodes and arguments as
+ * the presentation ring). Every native call goes through here, whichever
+ * thread makes it. */
+static void native_exec(uint32_t op, const int32_t *a) {
+    switch (op) {
+    case OP_FILTER:  sw_set_texture_filter(a[0]); break;
+    case OP_SEMI:    sw_set_semi_transparency(a[0], a[1]); break;
+    case OP_MASK:    sw_set_mask_bits(a[0], a[1]); break;
+    case OP_TW:      sw_set_texture_window((uint32_t)a[0]); break;
+    case OP_MOD:     sw_set_color_modulation(a[0], a[1], a[2], a[3]); break;
+    case OP_PRECISE: sw_set_precise_triangle(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+    case OP_PERSP: {
+        float q[3]; memcpy(q, a + 1, sizeof q);
+        sw_set_perspective_triangle(a[0], q[0], q[1], q[2]);
+        break;
+    }
+    case OP_FILL:    sw_fill_rect(a[0], a[1], a[2], a[3], (uint16_t)a[4]); break;
+    case OP_COPY:    sw_copy_rect(a[0], a[1], a[2], a[3], a[4], a[5]); break;
+    case OP_FLAT_TRI:
+        sw_draw_flat_triangle(a[0], a[1], a[2], a[3], a[4], a[5], (uint16_t)a[6]); break;
+    case OP_GOUR_TRI:
+        sw_draw_gouraud_triangle(a[0], a[1], (uint16_t)a[2], a[3], a[4], (uint16_t)a[5],
+                                 a[6], a[7], (uint16_t)a[8]); break;
+    case OP_TEX_TRI:
+        sw_draw_textured_triangle(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                                  a[8], a[9], a[10], a[11],
+                                  (uint16_t)a[12], (uint16_t)a[13], (uint16_t)a[14]); break;
+    case OP_STEX_TRI:
+        sw_draw_shaded_textured_triangle(a[0], a[1], a[2], a[3], (uint32_t)a[4],
+                                         a[5], a[6], a[7], a[8], (uint32_t)a[9],
+                                         a[10], a[11], a[12], a[13], (uint32_t)a[14],
+                                         (uint16_t)a[15], (uint16_t)a[16], (uint16_t)a[17],
+                                         a[18]); break;
+    case OP_FLAT_RECT: sw_draw_flat_rect(a[0], a[1], a[2], a[3], (uint16_t)a[4]); break;
+    case OP_TEX_RECT:
+        sw_draw_textured_rect(a[0], a[1], a[2], a[3], a[4], a[5],
+                              (uint16_t)a[6], (uint16_t)a[7], (uint16_t)a[8]); break;
+    case OP_TEX_RECT_SCALED:
+        sw_draw_textured_rect_scaled(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                                     (uint16_t)a[8], (uint16_t)a[9], (uint16_t)a[10]); break;
+    case OP_LINE:  sw_draw_line(a[0], a[1], a[2], a[3], (uint16_t)a[4]); break;
+    case OP_SLINE: sw_draw_shaded_line(a[0], a[1], (uint16_t)a[2], a[3], a[4], (uint16_t)a[5]); break;
+    case OP_PIXEL: sw_vram_write(a[0], a[1], (uint16_t)a[2]); break;
+    case OP_AREA:   sw_set_draw_area(a[0], a[1], a[2], a[3]); break;
+    case OP_OFFSET: sw_set_draw_offset(a[0], a[1]); break;
+    default: break;
+    }
+}
+
+/* The second ring: single producer (emulation thread), single consumer (the
+ * native thread), nothing ever dropped. s_ntail moves past a record only
+ * once the rasterizer has returned from it, so "s_ntail == s_nhead" means
+ * every queued call is done. */
+#define NRING_BYTES (4u << 20)
+#define NKICK_BYTES (16u << 10)     /* wake the thread once this much is waiting */
+static uint8_t         *s_nring;
+static _Atomic uint32_t s_nhead, s_ntail;
+static _Atomic int      s_ncons_sleep;   /* the thread sleeps on s_ncv_data */
+static _Atomic int      s_nprod_wait;    /* the emulation thread waits on s_ncv_done */
+static pthread_mutex_t  s_nmu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t   s_ncv_data = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t   s_ncv_done = PTHREAD_COND_INITIALIZER;
+static pthread_t        s_nthread;
+static int              s_nthread_on;    /* native calls go through the ring */
+static uint32_t         s_nsyncs, s_nsync_waits;   /* probes */
+
+static void *native_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        uint32_t tail = atomic_load(&s_ntail);
+        if (tail == atomic_load(&s_nhead)) {
+            /* Calls come in bursts (a frame's display list): look again for a
+             * moment before sleeping, a wake-up costs the game more. */
+            int again = 0;
+            for (int spin = 0; spin < 4000 && !again; spin++)
+                again = atomic_load(&s_nhead) != tail;
+            if (again) continue;
+            pthread_mutex_lock(&s_nmu);
+            atomic_store(&s_ncons_sleep, 1);
+            if (atomic_load(&s_nhead) == tail) pthread_cond_wait(&s_ncv_data, &s_nmu);
+            atomic_store(&s_ncons_sleep, 0);
+            pthread_mutex_unlock(&s_nmu);
+            continue;
+        }
+        const RecHdr *h = (const RecHdr *)(s_nring + tail % NRING_BYTES);
+        if (h->op != OP_WRAP) native_exec(h->op, (const int32_t *)(h + 1));
+        atomic_store(&s_ntail, tail + h->bytes);
+        if (atomic_load(&s_nprod_wait)) {
+            pthread_mutex_lock(&s_nmu); pthread_cond_signal(&s_ncv_done); pthread_mutex_unlock(&s_nmu);
+        }
+    }
+    return NULL;
+}
+
+/* Emulation thread: the native thread gets to work on what is queued. The
+ * sleep flag is taken, not just read: the thread needs some microseconds to
+ * wake up, and the calls queued meanwhile would each signal it again (a
+ * twentieth of the emulation thread went into those wake-ups). */
+static void native_kick(void) {
+    if (atomic_load(&s_ncons_sleep) && atomic_exchange(&s_ncons_sleep, 0)) {
+        pthread_mutex_lock(&s_nmu); pthread_cond_signal(&s_ncv_data); pthread_mutex_unlock(&s_nmu);
+    }
+}
+/* Once per frame: a short tail left below NKICK_BYTES gets drawn too. */
+static void native_kick_pending(void) {
+    if (s_nthread_on && atomic_load(&s_ntail) != atomic_load(&s_nhead)) native_kick();
+}
+
+/* Emulation thread: waits while `more` holds (re-read under the lock, after
+ * announcing the wait, so a record finished meanwhile is never missed). */
+static void native_wait_while_full(uint32_t need) {
+    for (;;) {
+        if (NRING_BYTES - (atomic_load(&s_nhead) - atomic_load(&s_ntail)) >= need) return;
+        native_kick();
+        pthread_mutex_lock(&s_nmu);
+        atomic_store(&s_nprod_wait, 1);
+        if (NRING_BYTES - (atomic_load(&s_nhead) - atomic_load(&s_ntail)) < need)
+            pthread_cond_wait(&s_ncv_done, &s_nmu);
+        atomic_store(&s_nprod_wait, 0);
+        pthread_mutex_unlock(&s_nmu);
+    }
+}
+
+/* Emulation thread: every native call queued so far has been run. To be
+ * called before the authoritative VRAM is read or written directly. */
+static void native_sync(void) {
+    if (!s_nthread_on) return;
+    const uint32_t head = atomic_load(&s_nhead);
+    if (atomic_load(&s_ntail) == head) return;
+    s_nsyncs++;
+    native_kick();
+    /* The thread is seldom more than a few hundred microseconds behind. */
+    for (int spin = 0; spin < 20000; spin++)
+        if (atomic_load(&s_ntail) == head) return;
+    s_nsync_waits++;
+    for (;;) {
+        native_kick();
+        pthread_mutex_lock(&s_nmu);
+        atomic_store(&s_nprod_wait, 1);
+        if (atomic_load(&s_ntail) != head) pthread_cond_wait(&s_ncv_done, &s_nmu);
+        atomic_store(&s_nprod_wait, 0);
+        pthread_mutex_unlock(&s_nmu);
+        if (atomic_load(&s_ntail) == head) return;
+    }
+}
+
+/* Emulation thread: one native call, run here or queued for the thread. */
+static void native(uint32_t op, int n, const int32_t *a) {
+    if (!s_nthread_on) { native_exec(op, a); return; }
+    const uint32_t size = (uint32_t)((sizeof(RecHdr) + (uint32_t)n * 4u + 7u) & ~7u);
+    uint32_t head = atomic_load_explicit(&s_nhead, memory_order_relaxed);
+    uint32_t pos = head % NRING_BYTES;
+    const uint32_t contig = NRING_BYTES - pos;
+    if (contig < size) {                     /* pad to the start of the ring */
+        native_wait_while_full(contig);
+        RecHdr *w = (RecHdr *)(s_nring + pos);
+        w->op = OP_WRAP; w->bytes = contig;
+        head += contig;
+        atomic_store(&s_nhead, head);
+        pos = 0;
+    }
+    native_wait_while_full(size);
+    RecHdr *h = (RecHdr *)(s_nring + pos);
+    h->op = op; h->bytes = size;
+    memcpy(h + 1, a, (size_t)n * 4u);
+    atomic_store(&s_nhead, head + size);
+    if (head + size - atomic_load(&s_ntail) >= NKICK_BYTES) native_kick();
+}
+#define NAT(op, ...) do { const int32_t n_[] = { __VA_ARGS__ }; \
+    native(op, (int)(sizeof n_ / sizeof n_[0]), n_); } while (0)
+
+/* gr_vram_sync (gpu.c reads or writes its VRAM array directly). */
+static void t_vram_sync(void) { native_sync(); }
+
 /* ---- emulation-thread side ---------------------------------------------- */
 static uint16_t *s_vram;
 static int s_scale = 1, s_filter = 0;
@@ -634,7 +823,8 @@ void swt_vram_readback_begin(void) { s_quiet = 0; s_readbacks++; }
  * -free gameplay frames, [3] read-backs so far, [4] primitives not
  * rasterized; [1] has bit 31 set during gameplay. GPU mode: [7] resyncs,
  * [8] transfers replayed, [9] of which 64x64 or more, [10] the last of
- * those (x | y << 10 | w << 19). */
+ * those (x | y << 10 | w << 19). Native thread: [11] on, [12] reads that
+ * found calls still queued, [13] of which had to sleep. */
 EMSCRIPTEN_KEEPALIVE uint32_t swt_probe(int i) {
     switch (i) {
     case 0: return (uint32_t)s_skip_raster_cfg;
@@ -654,6 +844,9 @@ EMSCRIPTEN_KEEPALIVE uint32_t swt_probe(int i) {
     case 8: return s_gl_xfers;
     case 9: return s_gl_big_xfers;
     case 10: return s_gl_last_xfer;
+    case 11: return (uint32_t)s_nthread_on;
+    case 12: return s_nsyncs;
+    case 13: return s_nsync_waits;
     default: return 0;
     }
 }
@@ -671,6 +864,7 @@ static void rec_vram_rect(int x, int y, int w, int h) {
 }
 static void resync(void) {
     s_resyncs++;
+    native_sync();                       /* rec_vram_rect reads s_vram */
     REC(OP_SCALE, s_scale);
     REC(OP_FILTER, s_filter);
     REC(OP_SEMI, s_sh_semi[0], s_sh_semi[1]);
@@ -699,6 +893,7 @@ static void resync(void) {
 }
 
 static void t_init(uint16_t *vram) {
+    native_sync();                       /* a second init: nothing still drawing */
     s_vram = vram;
     sw_renderer_init(vram);
     if (!s_started) {
@@ -706,6 +901,16 @@ static void t_init(uint16_t *vram) {
         s_skip_raster_cfg = skip && skip[0] == '1';
         const char *gl = getenv("PSX_WEB_GL");
         s_gl_mode = gl && gl[0] == '1';
+        const char *nt = getenv("PSX_WEB_RASTER_THREAD");
+        if (nt && nt[0] == '1') {
+            /* The rasterizer needs little stack (the build's default is 16 MB). */
+            pthread_attr_t at;
+            pthread_attr_init(&at);
+            pthread_attr_setstacksize(&at, 1u << 20);
+            s_nring = (uint8_t *)malloc(NRING_BYTES);
+            s_nthread_on = s_nring && pthread_create(&s_nthread, &at, native_thread, NULL) == 0;
+            pthread_attr_destroy(&at);
+        }
         s_ring = (uint8_t *)malloc(RING_BYTES);
         s_hr_vram = (uint16_t *)calloc(1024u * 512u, sizeof(uint16_t));
         if (s_hr_vram) memcpy(s_hr_vram, vram, 1024u * 512u * 2u);
@@ -724,34 +929,34 @@ static void t_set_scale(int scale) {
     REC(OP_SCALE, scale);
 }
 static int  t_scale(void) { return s_scale; }
-static void t_set_filter(int b) { s_filter = b; sw_set_texture_filter(b); REC(OP_FILTER, b); }
+static void t_set_filter(int b) { s_filter = b; NAT(OP_FILTER, b); REC(OP_FILTER, b); }
 static int  t_filter(void) { return s_filter; }
 static void t_semi(int e, int m) {
-    sw_set_semi_transparency(e, m); s_sh_semi[0] = e; s_sh_semi[1] = m; REC(OP_SEMI, e, m);
+    NAT(OP_SEMI, e, m); s_sh_semi[0] = e; s_sh_semi[1] = m; REC(OP_SEMI, e, m);
 }
-static void t_mask(int s, int c) { sw_set_mask_bits(s, c); s_sh_mask[0] = s; s_sh_mask[1] = c; REC(OP_MASK, s, c); }
-static void t_tw(uint32_t raw) { sw_set_texture_window(raw); s_sh_tw = (int)raw; REC(OP_TW, (int32_t)raw); }
+static void t_mask(int s, int c) { NAT(OP_MASK, s, c); s_sh_mask[0] = s; s_sh_mask[1] = c; REC(OP_MASK, s, c); }
+static void t_tw(uint32_t raw) { NAT(OP_TW, (int32_t)raw); s_sh_tw = (int)raw; REC(OP_TW, (int32_t)raw); }
 static void t_mod(int r, int g, int b, int raw) {
-    sw_set_color_modulation(r, g, b, raw);
+    NAT(OP_MOD, r, g, b, raw);
     s_sh_mod[0] = r; s_sh_mod[1] = g; s_sh_mod[2] = b; s_sh_mod[3] = raw;
     REC(OP_MOD, r, g, b, raw);
 }
 static void t_precise(int e, int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
-    sw_set_precise_triangle(e, x0, y0, x1, y1, x2, y2);
+    NAT(OP_PRECISE, e, x0, y0, x1, y1, x2, y2);
     REC(OP_PRECISE, e, x0, y0, x1, y1, x2, y2);
 }
 static void t_persp(int e, float q0, float q1, float q2) {
-    sw_set_perspective_triangle(e, q0, q1, q2);
     int32_t a[4] = { e, 0, 0, 0 };
     float q[3] = { q0, q1, q2 };
     memcpy(a + 1, q, sizeof q);
+    native(OP_PERSP, 4, a);
     rec_args(OP_PERSP, 4, a);
 }
 static void t_fill(int x, int y, int w, int h, uint16_t c) {
-    sw_fill_rect(x, y, w, h, c); stale_clear_rect(x, y, w, h); REC(OP_FILL, x, y, w, h, c);
+    NAT(OP_FILL, x, y, w, h, c); stale_clear_rect(x, y, w, h); REC(OP_FILL, x, y, w, h, c);
 }
 static void t_copy(int sx, int sy, int dx, int dy, int w, int h) {
-    sw_copy_rect(sx, sy, dx, dy, w, h);
+    NAT(OP_COPY, sx, sy, dx, dy, w, h);
     if (w > 0 && h > 0) {
         if (stale_any(sx, sy, w, h)) { stale_set(dx, dy, dx + w - 1, dy + h - 1, 1, 0); s_stale_area[0] = -1; }
         else stale_clear_rect(dx, dy, w, h);
@@ -759,49 +964,54 @@ static void t_copy(int sx, int sy, int dx, int dy, int w, int h) {
     REC(OP_COPY, sx, sy, dx, dy, w, h);
 }
 static void t_flat_tri(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t c) {
-    if (!s_skip_raster) sw_draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);
+    if (!s_skip_raster) NAT(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
     bd_sync(); REC(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
 }
 static void t_gour_tri(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1, int x2, int y2, uint16_t c2) {
-    if (!s_skip_raster) sw_draw_gouraud_triangle(x0, y0, c0, x1, y1, c1, x2, y2, c2);
+    if (!s_skip_raster) NAT(OP_GOUR_TRI, x0, y0, c0, x1, y1, c1, x2, y2, c2);
     bd_sync(); REC(OP_GOUR_TRI, x0, y0, c0, x1, y1, c1, x2, y2, c2);
 }
 static void t_tex_tri(int x0, int y0, int u0, int v0, int x1, int y1, int u1, int v1,
                       int x2, int y2, int u2, int v2, uint16_t cx, uint16_t cy, uint16_t tp) {
-    if (!s_skip_raster) sw_draw_textured_triangle(x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
+    if (!s_skip_raster) NAT(OP_TEX_TRI, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
     bd_sync(); REC(OP_TEX_TRI, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
 }
 static void t_stex_tri(int x0, int y0, int u0, int v0, uint32_t c0, int x1, int y1, int u1, int v1, uint32_t c1,
                        int x2, int y2, int u2, int v2, uint32_t c2, uint16_t cx, uint16_t cy, uint16_t tp, int raw) {
-    if (!s_skip_raster) sw_draw_shaded_textured_triangle(x0, y0, u0, v0, c0, x1, y1, u1, v1, c1, x2, y2, u2, v2, c2, cx, cy, tp, raw);
+    const int32_t a[] = { x0, y0, u0, v0, (int32_t)c0, x1, y1, u1, v1, (int32_t)c1,
+                          x2, y2, u2, v2, (int32_t)c2, cx, cy, tp, raw };
+    if (!s_skip_raster) native(OP_STEX_TRI, 19, a);
     bd_sync();
-    REC(OP_STEX_TRI, x0, y0, u0, v0, (int32_t)c0, x1, y1, u1, v1, (int32_t)c1,
-        x2, y2, u2, v2, (int32_t)c2, cx, cy, tp, raw);
+    rec_args(OP_STEX_TRI, 19, a);
 }
 static void t_flat_rect(int x, int y, int w, int h, uint16_t c) {
-    if (!s_skip_raster) sw_draw_flat_rect(x, y, w, h, c);
+    if (!s_skip_raster) NAT(OP_FLAT_RECT, x, y, w, h, c);
     bd_sync(); REC(OP_FLAT_RECT, x, y, w, h, c);
 }
 static void t_tex_rect(int x, int y, int w, int h, int u, int v, uint16_t cx, uint16_t cy, uint16_t tp) {
-    if (!s_skip_raster) sw_draw_textured_rect(x, y, w, h, u, v, cx, cy, tp);
+    if (!s_skip_raster) NAT(OP_TEX_RECT, x, y, w, h, u, v, cx, cy, tp);
     bd_sync(); REC(OP_TEX_RECT, x, y, w, h, u, v, cx, cy, tp);
 }
 static void t_tex_rect_scaled(int x, int y, int w, int h, int u0, int v0, int u1, int v1,
                               uint16_t cx, uint16_t cy, uint16_t tp) {
-    if (!s_skip_raster) sw_draw_textured_rect_scaled(x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
+    if (!s_skip_raster) NAT(OP_TEX_RECT_SCALED, x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
     bd_sync(); REC(OP_TEX_RECT_SCALED, x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
 }
 static void t_line(int x0, int y0, int x1, int y1, uint16_t c) {
-    if (!s_skip_raster) sw_draw_line(x0, y0, x1, y1, c);
+    if (!s_skip_raster) NAT(OP_LINE, x0, y0, x1, y1, c);
     bd_sync(); REC(OP_LINE, x0, y0, x1, y1, c);
 }
 static void t_sline(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
-    if (!s_skip_raster) sw_draw_shaded_line(x0, y0, c0, x1, y1, c1);
+    if (!s_skip_raster) NAT(OP_SLINE, x0, y0, c0, x1, y1, c1);
     bd_sync(); REC(OP_SLINE, x0, y0, c0, x1, y1, c1);
 }
-static void t_pixel(int x, int y, uint16_t p) { sw_vram_write(x, y, p); REC(OP_PIXEL, x, y, p); }
-static uint16_t t_read(int x, int y) { return sw_vram_read(x, y); }
+static void t_pixel(int x, int y, uint16_t p) { NAT(OP_PIXEL, x, y, p); REC(OP_PIXEL, x, y, p); }
+static uint16_t t_read(int x, int y) { native_sync(); return sw_vram_read(x, y); }
 static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d) {
+    /* gpu.c has already written these pixels into the VRAM array itself
+     * (after gr_vram_sync), and d may point into it (t_vram_restored): the
+     * copy is made here, once the native thread has nothing left to draw. */
+    native_sync();
     sw_vram_transfer_in(x, y, w, h, d);
     if (w <= 0 || h <= 0) return;
     stale_clear_rect(x, y, w, h);
@@ -812,14 +1022,20 @@ static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d) {
     memcpy(p + 4, d, px * 2u);
     rec_commit();
 }
-static void t_xfer_out(int x, int y, int w, int h, uint16_t *d) { sw_vram_transfer_out(x, y, w, h, d); }
+static void t_xfer_out(int x, int y, int w, int h, uint16_t *d) {
+    native_sync();
+    sw_vram_transfer_out(x, y, w, h, d);
+}
 static void t_area(int x1, int y1, int x2, int y2) {
-    sw_set_draw_area(x1, y1, x2, y2);
+    NAT(OP_AREA, x1, y1, x2, y2);
     s_sh_area[0] = x1; s_sh_area[1] = y1; s_sh_area[2] = x2; s_sh_area[3] = y2;
     REC(OP_AREA, x1, y1, x2, y2);
 }
-static void t_get_area(int *x1, int *y1, int *x2, int *y2) { sw_get_draw_area(x1, y1, x2, y2); }
-static void t_offset(int x, int y) { sw_set_draw_offset(x, y); s_sh_off[0] = x; s_sh_off[1] = y; REC(OP_OFFSET, x, y); }
+static void t_get_area(int *x1, int *y1, int *x2, int *y2) {
+    native_sync();                       /* the rasterizer's own (clamped) values */
+    sw_get_draw_area(x1, y1, x2, y2);
+}
+static void t_offset(int x, int y) { NAT(OP_OFFSET, x, y); s_sh_off[0] = x; s_sh_off[1] = y; REC(OP_OFFSET, x, y); }
 
 static void t_wide_conf(int w, int off) {
     if (w <= 0 || w != s_wide_w) s_wide_nbases = 0;
@@ -833,6 +1049,7 @@ static void t_wide_target(int base) {
     if (s_wide_w) { note_base(base); s_wide_target = 1; }
     /* Once per frame (the game picks its draw buffer): gameplay on or off.
      * Leaving gameplay re-arms the skip for the next time. */
+    native_kick_pending();
     s_gameplay = gpu_ws_gameplay_state_active();
     if (!s_gameplay) s_quiet = 0;
     else if (s_quiet < QUIET_FRAMES) s_quiet++;
@@ -852,6 +1069,7 @@ static void t_wide_margins(int base, int y, int h, uint16_t c, int sides) {
 /* Present read-outs: queued, run by the presentation thread into the page's
  * back buffer, then made visible by psx_web_publish_frame → swt_publish. */
 static int t_render_display(uint32_t *o, int p, int dx, int dy, int dw, int dh) {
+    native_sync();
     return sw_render_display(o, p, dx, dy, dw, dh);       /* native VRAM */
 }
 static int t_render_hires(uint32_t *o, int p, int dx, int dy, int dw, int dh) {
@@ -887,6 +1105,7 @@ static int t_wide_dump(uint32_t *o, int cap, int *ow, int *oh, int base) {
 int swt_publish(const uint32_t *px, int w, int h, int logical_w, int dst_w,
                 int dst_h, int content_h, int nearest) {
     if (!s_started) return 0;
+    native_kick_pending();               /* the frame's last native calls */
     if (s_pending_read) {
         s_pending_read = 0;
         REC(OP_PUBLISH, w, h, logical_w, dst_w, dst_h, content_h, nearest);
@@ -930,4 +1149,5 @@ const GpuRenderBackend SWT_BACKEND = {
     .wide_clear_margins = t_wide_margins, .render_wide_display = t_render_wide,
     .wide_dump_full = t_wide_dump,
     .vram_restored = t_vram_restored,
+    .vram_sync = t_vram_sync,
 };

@@ -65,6 +65,7 @@ extern const GpuRenderBackend *vk_backend_get(void);
 
 static const GpuRenderBackend *g_b         = &SW_BACKEND;
 static GrBackend               g_effective = GR_BACKEND_SOFTWARE;
+void (*g_gr_vram_sync)(void) = NULL;   /* gr_vram_sync: the active backend's, set by gr_init */
 
 void gr_set_backend(GrBackend backend) {
     if (backend == GR_BACKEND_OPENGL) {
@@ -109,7 +110,10 @@ void gr_set_backend(GrBackend backend) {
 GrBackend gr_backend(void) { return g_effective; }
 
 /* ---- Dispatch wrappers (one line each; forward to the active backend) ---- */
-void gr_init(uint16_t *vram)                         { g_b->init(vram); }
+void gr_init(uint16_t *vram) {
+    g_b->init(vram);
+    g_gr_vram_sync = g_b->vram_sync;
+}
 void gr_set_scale(int scale)                         { g_b->set_scale(scale); }
 int  gr_scale(void)                                  { return g_b->scale(); }
 void gr_set_texture_filter(int bilinear)             { g_b->set_texture_filter(bilinear); }
