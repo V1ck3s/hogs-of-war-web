@@ -1096,6 +1096,42 @@ uint32_t dma_cycles_to_internal_event(void) {
     return best;
 }
 
+/* 1 while the GPU linked-list transfer is the only DMA activity that can
+ * involve another device: it is running, and no CD-ROM or MDEC transfer is
+ * in progress or waiting for its device. A list transfer reads guest RAM and
+ * feeds the GPU; it neither reads nor changes the serial port, the CD drive,
+ * the timers or the VBlank counter (psx_cycles.c relies on this to walk a
+ * list word by word without walking those devices cycle by cycle). */
+int dma_gpu_list_runs_alone(void) {
+    return gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
+           channel_enabled(2) && !cdrom_async.active &&
+           !mdec_async[0].active && !mdec_async[1].active;
+}
+
+/* Up to max_cycles cycles of a GPU linked-list transfer running alone, one
+ * cycle at a time: exactly "psx_cycle_count += 1; dma_advance(1)" repeated
+ * while dma_gpu_list_runs_alone() holds, without the steps of dma_advance()
+ * that cannot apply then (no MDEC or CD-ROM transfer exists). Returns the
+ * cycles done; fewer than asked when the list ends or stops being alone. */
+uint32_t dma_gpu_list_run(uint32_t max_cycles) {
+    uint32_t done = 0;
+    g_dma_exec_depth++;
+    while (done < max_cycles && dma_gpu_list_runs_alone()) {
+        psx_cycle_count += 1u;
+        g_dma_cur_ch = 2;
+        g_dma_cur_madr = gpu_linked_list.current_addr;
+        g_dma_cur_bcr = channels[2].bcr;
+        g_dma_initiator_pc = s_dma_ch_initiator_pc[2];
+        dma_gpu_ll_advance(&gpu_linked_list, 1u, &gpu_ll_ops, NULL);
+        for (int ch = 0; ch < 7; ch++)
+            advance_delayed_complete(ch, 1u);
+        g_dma_cur_ch = -1;
+        done++;
+    }
+    g_dma_exec_depth--;
+    return done;
+}
+
 uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 3))) return 0xFFFFFFFFu;
     uint32_t best = 0xFFFFFFFFu;

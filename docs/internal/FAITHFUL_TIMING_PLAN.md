@@ -213,6 +213,35 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-11-20 (web-runtime branch: device-service cost of GPU list DMA):**
+  Profiling a recorded Cochons de Guerre battle in WebAssembly put a fifth of
+  the emulation thread in the device scheduler. Cause: a GPU linked-list
+  transfer reads one word per cycle, so while it runs every cycle is a DMA
+  event, and `psx_devices_service_to_now` walked all six devices plus the six
+  distance queries once per cycle (about 12,000 list words per frame).
+  Change (`psx_cycles.c`, `dma.c`): while the list transfer is the only DMA
+  activity (`dma_gpu_list_runs_alone`: no CD-ROM or MDEC transfer in progress
+  or waiting), the transfer is still stepped word by word at its exact cycles
+  (`dma_gpu_list_run`), and the other devices receive the same cycles in one
+  call, up to one cycle short of their nearest advertised event; that event
+  then goes through the ordered per-device step as before. No guest cycle,
+  IRQ, MMIO sync or deadline is removed. This relies only on what the
+  scheduler already assumes whenever no DMA runs (a device with no advertised
+  event in an interval accumulates its cycles) and on a list transfer not
+  involving SIO, CD, timers or the VBlank counter. One known difference in
+  kind, not guest-visible in the runs below: CD-DA sector delivery is not an
+  advertised event, so inside a list transfer it now happens at the chunk
+  boundary (a few cycles later at most) as it already does outside one.
+  Evidence: a 13,800-frame recorded one-player battle replayed natively gives
+  the same 23 RAM digests as the recording (and as before the change), with
+  6 % less CPU; a recorded two-player session replayed in the browser gives
+  15/15 digests. NOT checked against the Beetle oracle, and no other title
+  was run. The same session also fixed a host-only cost with no timing
+  content: `psx_overlay_resident_crc_at` walked every cached static variant
+  on each external interpreter entry (now a per-page index, self-checked
+  against the full walk over the whole recording before the check was
+  removed).
+
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
   plus SELECT-time ACK fabrication and INTC-pending ACK requeueing with the

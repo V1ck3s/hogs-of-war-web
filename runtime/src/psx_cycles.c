@@ -103,6 +103,17 @@ static void advance_devices(uint32_t c) {
     psx_spu_sample_event_service();
 }
 
+/* The devices other than DMA, over cycles already added to psx_cycle_count,
+ * in the order advance_devices() uses (see the GPU-list run in
+ * psx_devices_service_to_now). */
+static void advance_devices_behind_dma(uint32_t c) {
+    sio_advance(c);
+    cdrom_advance(c);
+    timers_advance(c);
+    interrupts_advance_cycles(c);
+    psx_spu_sample_event_service();
+}
+
 /* ===== Event-deadline device servicing (production fast path) =================
  *
  * The faithful core charges guest cycles PER INSTRUCTION (psx_cyc.h §1), and the
@@ -154,13 +165,20 @@ uint64_t g_psx_cycle_fast_limit = 0;
  * exactly ON the nearest event so chained sequences (SIO byte -> ack -> next
  * byte; CD sector trains) replay event-by-event, and so events armed while
  * their IRQ is masked in I_MASK still process on time (games poll I_STAT). */
-static uint32_t devices_cycles_to_next_internal_event(void) {
+/* The same bound without DMA: the nearest event of every other device. */
+static uint32_t devices_cycles_to_next_event_beside_dma(void) {
     uint32_t best = interrupts_cycles_to_vblank();   /* frame pacing always */
     uint32_t t = timers_cycles_to_irq(0xFFFFFFFFu);  if (t < best) best = t;
     uint32_t c = cdrom_cycles_to_irq(0xFFFFFFFFu);   if (c < best) best = c;
-    uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
     uint32_t s = sio_cycles_to_irq(0xFFFFFFFFu);     if (s < best) best = s;
     uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
+    if (best == 0) best = 1;    /* due/overdue: process within one cycle */
+    return best;
+}
+
+static uint32_t devices_cycles_to_next_internal_event(void) {
+    uint32_t best = devices_cycles_to_next_event_beside_dma();
+    uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
     if (best == 0) best = 1;    /* due/overdue: process within one cycle */
     return best;
 }
@@ -224,6 +242,30 @@ void psx_devices_service_to_now(void) {
         interrupts_service_scheduled_events();
         while (psx_cycle_count < target) {
             uint32_t remaining = (uint32_t)(target - psx_cycle_count);
+            /* GPU linked-list run. A list transfer reads one word per cycle,
+             * so while it runs every cycle is a DMA event and the loop below
+             * walks all six devices, plus the six distance queries, once per
+             * cycle: a battle sends some 12,000 list words per frame and the
+             * walk was a fifth of the WebAssembly emulation thread. The other
+             * devices have no event before the bound taken here and a list
+             * transfer does not involve them (dma_gpu_list_runs_alone), so
+             * between two of their events they only accumulate cycles: the
+             * transfer is stepped word by word at its exact cycles, as
+             * before, and the others then receive the same cycles in one
+             * call -- the chunking this scheduler already applies to them
+             * whenever no DMA is running. The run stops one cycle short of
+             * their nearest event, which goes through the ordered step below
+             * like every other event. */
+            if (remaining > 1u && dma_gpu_list_runs_alone()) {
+                uint32_t quiet = devices_cycles_to_next_event_beside_dma();
+                uint32_t run = quiet - 1u < remaining ? quiet - 1u : remaining;
+                uint32_t done = dma_gpu_list_run(run);
+                if (done) {
+                    advance_devices_behind_dma(done);
+                    interrupts_service_scheduled_events();
+                    continue;
+                }
+            }
             uint32_t step = remaining;
             uint32_t to_ev = devices_cycles_to_next_internal_event();
             if (to_ev > 0 && to_ev < step) step = to_ev;

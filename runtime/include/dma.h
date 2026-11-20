@@ -35,6 +35,8 @@ uint32_t dma_cycles_to_irq(uint32_t i_mask);
  * not merely the final IRQ. RAM-producing DMA must become visible at its
  * per-word due cycle even when guest code polls ordinary RAM instead of DICR. */
 uint32_t dma_cycles_to_internal_event(void);
+int      dma_gpu_list_runs_alone(void);
+uint32_t dma_gpu_list_run(uint32_t max_cycles);
 /* Strict deliverability form for wait-loop elision: unlike the conservative
  * scheduler bound, ignores channel completions whose DICR IRQ is disabled. */
 uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask);
