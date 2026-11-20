@@ -13,8 +13,17 @@
  * it for many seconds when its turn comes; bounded, the session runs at the
  * pace of the slowest machine and a turn change waits at most DRIFT frames.
  * DRIFT is well above a word's travel time, so a distant peer on a working
- * link never slows anyone. */
+ * link never slows anyone.
+ * Watching: a peer that follows another participant's turn receives their
+ * words in small bursts, at the mercy of the network. Played as they come,
+ * every late burst is a visible stall followed by a rush. Such a peer keeps a
+ * few words in hand instead (two, plus one more for each recent stall, given
+ * back when the link has been steady for a while) and holds that level by
+ * running a few percent faster or slower: the picture stays even, a fraction
+ * of a second behind the player. Purely local pacing: which word goes to
+ * which frame never changes. */
 #include "psx_lockstep.h"
+#include "psx_lockstep_playout.h"
 #include "mod_plugins.h"
 
 #include <emscripten/emscripten.h>
@@ -38,8 +47,12 @@ static volatile uint32_t s_gone_after[MAXP] = { PRESENT, PRESENT, PRESENT, PRESE
 static volatile uint32_t s_nplayers = 1;
 /* Status block read by JS: cur_frame, digest_frame, digest, wait_ms_total,
  * holder+1 (0 = nobody), [5] team shown, [6] digest seqlock, [7] participant
- * waited for + 1 (0 = none). */
-static volatile uint32_t s_status[8];
+ * waited for + 1 (0 = none); watching: [8] words in hand (low point of the
+ * last frames), [9] level aimed at, [10] times the words ran out, [11] pace
+ * (16.16 of the guest's period, 0 = guest's own, 1 = unthrottled);
+ * [12] frames timed, [13] frames that came more than 1.5 periods after the
+ * previous one, [14] more than 3 periods, [15] longest gap (ms). */
+static volatile uint32_t s_status[16];
 #define s_cur_frame s_status[0]
 #define s_last_digest_frame s_status[1]
 #define s_last_digest s_status[2]
@@ -51,9 +64,73 @@ uint32_t psx_lockstep_host(void) { return s_host; }
 static psx_lockstep_who_fn s_who;
 void psx_lockstep_set_who(psx_lockstep_who_fn fn) { s_who = fn; }
 
-/* frame_pacing.c: run the next frames unthrottled (this peer is behind the
- * player in control: their words are already here). */
+/* frame_pacing.c: run the next frames unthrottled (this peer is far behind
+ * the player in control: their words are already here), or at a period a few
+ * percent off the guest's (watching, see the head of this file). */
 extern volatile int g_psx_lockstep_hurry;
+extern volatile uint32_t g_psx_lockstep_pace_q16;
+extern volatile int g_psx_lockstep_watching, g_psx_lockstep_frame_late;
+
+/* This peer's participant index (a spectator has none). Its own turns are
+ * paced by the guest alone: its words are published as it goes. */
+static volatile uint32_t s_me = 0xFFFFFFFFu;
+/* 0: watching is played as the words come (tests, comparisons). */
+static volatile uint32_t s_playout = 1;
+
+static PsxPlayout s_play = { .who = -2 };
+
+/* Words of participant p known from `frame` on (this frame's included). */
+static uint32_t words_in_hand(uint32_t p, uint32_t frame) {
+    uint32_t k = 0;
+    while (k < 64u && s_tag[(frame + k) % RING][p] == frame + k + 1u) k++;
+    return k;
+}
+
+/* Pace of this frame. `waited`: the word of the participant in control was
+ * not there yet when the game asked for it (which is before the frame is
+ * due); the words ran out only if the frame then started late. */
+static int s_play_waited;
+static void playout(uint32_t frame, int who, int waited) {
+    if (who < 0 || (uint32_t)who == s_me || !s_playout) {
+        /* Own turn (or nobody's): the guest's pace. Kept: unthrottled when
+         * someone else's words are far ahead (a replay, or playout off). */
+        g_psx_lockstep_pace_q16 = 0;
+        g_psx_lockstep_watching = 0;
+        g_psx_lockstep_hurry = who >= 0 && (uint32_t)who != s_me &&
+                               s_tag[(frame + 3u) % RING][who] == frame + 4u;
+        psx_playout_reset(&s_play);
+        s_play_waited = 0;
+        s_status[8] = s_status[9] = 0;
+        s_status[11] = g_psx_lockstep_hurry ? PSX_PLAYOUT_UNPACED : PSX_PLAYOUT_OWN;
+        return;
+    }
+    const int dry = s_play_waited && g_psx_lockstep_frame_late;
+    const uint32_t pace = psx_playout_step(&s_play, frame, who,
+                                           words_in_hand((uint32_t)who, frame), dry);
+    s_play_waited = waited;
+    g_psx_lockstep_watching = 1;
+    g_psx_lockstep_hurry = pace == PSX_PLAYOUT_UNPACED;
+    g_psx_lockstep_pace_q16 = pace > PSX_PLAYOUT_UNPACED ? pace : 0u;
+    s_status[8] = s_play.low;
+    s_status[9] = s_play.level;
+    s_status[10] = s_play.dry;
+    s_status[11] = pace;
+}
+
+/* How evenly the frames follow one another on this peer (wall time between
+ * two frames taken by the game), for the page's reports. */
+static double s_frame_at;
+static void time_frame(void) {
+    const double now = emscripten_get_now();
+    if (s_frame_at > 0) {
+        const double gap = now - s_frame_at;
+        s_status[12]++;
+        if (gap > 30.0) s_status[13]++;
+        if (gap > 60.0) s_status[14]++;
+        if (gap > (double)s_status[15]) s_status[15] = gap > 60000.0 ? 60000u : (uint32_t)gap;
+    }
+    s_frame_at = now;
+}
 
 /* Mailbox from the page (late join), polled while waiting for a frame:
  * [0] seq of a snapshot load: [1] heap pointer (malloc'd by the page, freed
@@ -133,6 +210,8 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
         if (wait_word(p, frame, &t0)) goto loading;
         if (s_tag[i][p] == frame + 1u) { word = s_words[i][p]; who = (int)p; }
     }
+    /* The word of the participant in control was not there in time. */
+    const int dry = t0 != 0;
     /* Never more than DRIFT frames ahead of anyone still there. */
     if (frame >= s_base + DRIFT)
         for (uint32_t p = 0; p < n; p++)
@@ -144,9 +223,8 @@ static int web_provider(uint32_t frame, uint16_t pads[2]) {
     pads[1] = 0xFFFFu;
     s_status[4] = (uint32_t)(who + 1);
     s_status[5] = team;
-    /* Behind the player in control (their words for the next frames are
-     * already here): catch up unthrottled. */
-    g_psx_lockstep_hurry = who >= 0 && s_tag[(frame + 3u) % RING][who] == frame + 4u;
+    playout(frame, who, dry);
+    time_frame();
     s_cur_frame = frame;
     if (frame % 120u == 0u) {
         /* Seqlock for the JS reader: [1] frame, [2] digest, [6] frame again;
@@ -177,6 +255,10 @@ EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_enable(uint32_t nplayers) {
     psx_lockstep_set_provider(web_provider);
 }
 EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_set_players(uint32_t n) { s_nplayers = n; }
+/* The page tells which participant this peer is (0xFFFFFFFF: a spectator)
+ * and whether watching is smoothed (1) or played as the words come (0). */
+EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_set_me(uint32_t index) { s_me = index; }
+EMSCRIPTEN_KEEPALIVE void psx_web_lockstep_set_playout(uint32_t on) { s_playout = on; }
 /* Layout for JS (byte offsets into the shared heap). */
 EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_lockstep_tags(void) { return (uintptr_t)s_tag; }
 EMSCRIPTEN_KEEPALIVE uintptr_t psx_web_lockstep_words(void) { return (uintptr_t)s_words; }

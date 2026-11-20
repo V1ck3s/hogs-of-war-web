@@ -43,17 +43,58 @@ uint32_t frame_pacing_sleep_ms(uint64_t now, uint64_t deadline,
  * sub-realtime workload into an unbounded catch-up burst. */
 #define FRAME_PACER_CATCHUP_MAX_PERIODS 12u
 
-/* Set by the browser's lockstep (psx_lockstep_web.c) while this peer is behind
- * the player in control: frames run unthrottled until it has caught up. */
+/* Set by the browser's lockstep (psx_lockstep_web.c) while this peer is far
+ * behind the player in control: frames run unthrottled until it has caught
+ * up. */
 volatile int g_psx_lockstep_hurry = 0;
+/* Set by the same while this peer watches another participant play (see
+ * psx_lockstep_playout.h): the frame period as a 16.16 fraction of the
+ * guest's (0 = the guest's own), and "watching", under which a late frame
+ * leaves no debt -- it is not made up for by a burst of unpaced frames; the
+ * peer simply runs that much further behind the player, and the playout
+ * brings it back a few percent at a time. g_psx_lockstep_frame_late tells
+ * the playout that the frame just paced started after its time. */
+volatile uint32_t g_psx_lockstep_pace_q16 = 0;
+volatile int g_psx_lockstep_watching = 0;
+volatile int g_psx_lockstep_frame_late = 0;
+
+static void pacer_sleep_until(uint64_t deadline, uint64_t freq, uint64_t period) {
+    for (;;) {
+        uint64_t now = SDL_GetPerformanceCounter();     /* ONE read per iteration */
+        uint32_t ms = frame_pacing_sleep_ms(now, deadline, freq, period);
+        if (ms == 0) break;
+        /* Waitable timer on Win32; usleep on Unix — not coarse Sleep/SDL_Delay. */
+        psx_host_sleep_ms(ms);
+    }
+    while (SDL_GetPerformanceCounter() < deadline) {
+        /* final sub-ms spin */
+    }
+}
 
 void frame_pacer_wait(FramePacer *p, double period_ms) {
     uint64_t freq = SDL_GetPerformanceFrequency();
     uint64_t period = (uint64_t)((double)freq * (period_ms / 1000.0));
     uint64_t now = SDL_GetPerformanceCounter();
+    const uint32_t pace = g_psx_lockstep_pace_q16;
+    if (pace) period = (period * (uint64_t)pace) >> 16;
 
     if (g_psx_lockstep_hurry) {
         p->next_deadline = now + period;   /* no debt: pacing resumes from here */
+        g_psx_lockstep_frame_late = 0;
+        return;
+    }
+    if (g_psx_lockstep_watching) {
+        if (p->next_deadline != 0 && now < p->next_deadline) {
+            pacer_sleep_until(p->next_deadline, freq, period);
+            p->next_deadline += period;
+            g_psx_lockstep_frame_late = 0;
+            return;
+        }
+        /* Late (beyond an eighth of a period: not timer noise), or the first
+         * frame: it runs now and the next one is due a period from now. */
+        g_psx_lockstep_frame_late =
+            p->next_deadline != 0 && now - p->next_deadline > period / 8u;
+        p->next_deadline = now + period;
         return;
     }
     if (p->next_deadline == 0 ||
@@ -70,16 +111,7 @@ void frame_pacer_wait(FramePacer *p, double period_ms) {
         return;
     }
 
-    for (;;) {
-        now = SDL_GetPerformanceCounter();     /* ONE read per iteration */
-        uint32_t ms = frame_pacing_sleep_ms(now, p->next_deadline, freq, period);
-        if (ms == 0) break;
-        /* Waitable timer on Win32; usleep on Unix — not coarse Sleep/SDL_Delay. */
-        psx_host_sleep_ms(ms);
-    }
-    while (SDL_GetPerformanceCounter() < p->next_deadline) {
-        /* final sub-ms spin */
-    }
+    pacer_sleep_until(p->next_deadline, freq, period);
     p->next_deadline += period;
 }
 #endif /* FRAME_PACING_PURE_ONLY */

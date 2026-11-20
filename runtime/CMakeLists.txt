@@ -577,6 +577,14 @@ if(BUILD_TESTING)
     target_include_directories(frame_pacing_test PRIVATE include)
     add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
 
+    # A lockstep peer watching another player keeps a few input words in hand
+    # and nudges its pace (psx_lockstep_playout.h): simulated jittery links
+    # must play without late frames, where taking the words as they come
+    # stalls and rushes.
+    add_executable(lockstep_playout_test tests/test_lockstep_playout.c)
+    target_include_directories(lockstep_playout_test PRIVATE include)
+    add_test(NAME lockstep_playout_test COMMAND lockstep_playout_test)
+
     # Same family of bug as frame_pacing: the starvation watchdog's staleness
     # gap must not wrap when the (cross-thread) heartbeat is newer than the
     # clock sample taken by the emu thread.
