@@ -107,7 +107,8 @@ void psx_icache_fetch_miss(CPUState* cpu, uint32_t addr) {
 #endif
 }
 
-void psx_icache_fetch(CPUState* cpu, uint32_t addr) {
+/* Parenthesized: psx_icache.h also defines a call macro of this name. */
+void (psx_icache_fetch)(CPUState* cpu, uint32_t addr) {
     psx_icache_fetch_miss(cpu, addr);
 }
 

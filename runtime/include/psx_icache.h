@@ -33,6 +33,24 @@ static inline void psx_icache_fetch_interp(CPUState *cpu, uint32_t addr) {
 #endif
 }
 
+/* Tag hit, inlined at every fetch site (one per cache line of generated
+ * code): a line that is in the cache costs nothing and changes nothing.
+ * psx_icache_fetch_miss itself returns at once on a hit, and before that test
+ * only for a replay or a disabled model, which change nothing either, so
+ * leaving the call out on a hit is the same in every mode. A miss goes
+ * through it as before. Overlay DLLs keep their callback shim.
+ * PSX_ICACHE_FETCH_CALL (a per-source compile definition) keeps the plain
+ * call, for the same enormous seldom-run functions as PSX_CYC_WRITTEN_OUT
+ * (psx_cyc.h): one more test per cache line is what they compile worst. */
+#if defined(PSX_ENABLE_BLOCK_CYCLES) && !defined(PSX_OVERLAY_DLL_BUILD) && \
+    !defined(PSX_ICACHE_FETCH_CALL)
+static inline void psx_icache_fetch_inline(CPUState *cpu, uint32_t addr) {
+    if (g_psx_icache_tv[(addr & 0xFFCu) >> 2] == addr) return;
+    psx_icache_fetch_miss(cpu, addr);
+}
+#define psx_icache_fetch(cpu_, addr_) psx_icache_fetch_inline((cpu_), (addr_))
+#endif
+
 #ifdef __cplusplus
 }
 #endif
