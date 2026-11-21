@@ -36,8 +36,15 @@ following are reused as-is:
 cc -O2 -Icochons/tests/stubs cochons/tests/terrain_line_equiv.c -o equiv && ./equiv battle_ram.bin 40000
 ```
 
-The rest of the code the game loads at runtime is compiled to native in the
-background (`autocompile.sh`, gcc) and cached in `build/cache/`.
+The rest of the code the game loads at runtime is compiled ahead of time too
+(`generated/caps/`, needed by the WebAssembly build, which cannot compile at
+run time). It comes from captures of real play, but only their addresses are
+committed (`aot/captures.json`): the code itself is read back from your disc
+(`tools/capture_manifest.py`, CRC-checked). CMake builds these units by itself
+at configure time when they are missing or out of date and the disc is in
+`cochons/disc/` (`tools/build_caps.py`, about a minute). Code no unit covers is
+compiled to native in the background (`autocompile.sh`, gcc) and cached in
+`build/cache/`.
 
 ## Build (Linux)
 
@@ -50,6 +57,10 @@ CC=clang CXX=clang++ cmake -S cochons -B cochons/build -G Ninja -DCMAKE_BUILD_TY
 ninja -C cochons/build psx-runtime
 ln -s ../disc cochons/build/disc && mkdir -p cochons/build/extracted
 ```
+
+`generate` copies the disc into `cochons/disc/`, where the `cmake` step finds
+it to build the capture units. After running `generate` again, run `cmake`
+again too (it chains the units back behind the rewritten dispatcher).
 
 Dependencies: `cmake ninja-build clang pkg-config libgl-dev libegl-dev
 libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev

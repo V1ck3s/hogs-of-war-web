@@ -71,7 +71,29 @@ endif()
 # Code the game loads outside the AOT profile's modules, compiled ahead of
 # time from runtime captures and chained behind the AOT dispatcher
 # (tools/merge_static_overlays.py). Needed by the WebAssembly build, which
-# cannot compile at run time; harmless natively.
+# cannot compile at run time; harmless natively. Built here from the disc
+# (cochons/disc/*.cue, or -DCOCHONS_DISC=<cue>) and aot/captures.json when
+# missing or out of date: tools/build_caps.py. A later `generate` rewrites the
+# generated files (which cannot be configure dependencies here): run cmake again
+# after it, which re-chains the units in seconds.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/overlays_static.c")
+    find_program(COCHONS_PYTHON NAMES python3 python NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    set(_cochons_caps_cmd "${COCHONS_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_caps.py")
+    if(COCHONS_DISC)
+        list(APPEND _cochons_caps_cmd --disc "${COCHONS_DISC}")
+    endif()
+    execute_process(COMMAND ${_cochons_caps_cmd} RESULT_VARIABLE _cochons_caps_rc)
+    if(_cochons_caps_rc EQUAL 2)
+        message(WARNING "No disc in cochons/disc: the capture units (generated/caps) "
+                        "could not be built. The game runs, but the code they cover is "
+                        "interpreted (much slower in the browser).")
+    elseif(NOT _cochons_caps_rc EQUAL 0)
+        message(FATAL_ERROR "tools/build_caps.py failed (${_cochons_caps_rc})")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/aot/captures.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
+endif()
 file(GLOB _cochons_caps_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/caps/*.c")
 if(_cochons_caps_sources)
     target_sources(psx-runtime PRIVATE ${_cochons_caps_sources})
