@@ -1,34 +1,29 @@
 # Cochons de Guerre Recompiled (SLES-02766)
 
-Native Linux recompilation of the **French** PlayStation release of *Hogs of
-War* (*Les Cochons de Guerre*, SLES-02766), built on the same `psxrecomp`
-framework as Frontschweine (the German release) and running its game code
-natively: PS1 AI, French text, voices and sounds. It is the program the
-streaming server (`../stream`) runs.
+Recompilation of the **French** PlayStation release of *Hogs of War* (*Les
+Cochons de Guerre*, PAL, SLES-02766), and only of that disc: every address,
+patch and hash here was measured on it. It runs the game's own code: PS1 AI,
+French text, voices and sounds. The online game (`../online`) is its
+WebAssembly build; `../start.sh` builds everything from the disc.
 
-## What comes from Frontschweine
+## Game-specific settings
 
-The French and German EXEs are identical up to `0x80046000`, then shifted by
-`+0x30` / `+0x60` (comparison of the JAL-target seed lists). So the
-following are reused as-is:
-
-- `overlay_region_floor = 0x18000` and the widescreen settings (addresses below
-  the shift);
+- `overlay_region_floor = 0x18000` and the widescreen settings;
 - the mods: **Instant Loading**, **CPU Overclock** (busy-waits; the FMV retry
-  loop is at `0x8005BFD0` in FR, measured in RAM), **60 Hz Mode**, **Widescreen**
-  — here in an *adaptive* mode (the window shape sets the field of view from
-  4:3 to 32:9, which the streaming server uses) — and **Fast Enemy AI**: the
-  battle module `LOAD/L640V2.MGL` loads at `0x8005B3D0` in FR (+0x30), so the
-  AI's terrain line walk is at `0x8006ADA0` with its tile table at
-  `0x80078698`. The native hook is proven equivalent to the game's own routine
-  by `tests/terrain_line_equiv.c` (real routine from the battle RAM run in a
-  MIPS interpreter vs the hook: 40 000 random lines, 0 differences in return
-  value, registers and RAM; a deliberately wrong hook is caught every time);
+  loop is at `0x8005BFD0`, measured in RAM), **60 Hz Mode**, **Widescreen**
+  in an *adaptive* mode (the window shape sets the field of view from 4:3 to
+  32:9) and **Fast Enemy AI**: the battle module `LOAD/L640V2.MGL` loads at
+  `0x8005B3D0`, so the AI's terrain line walk is at `0x8006ADA0` with its
+  tile table at `0x80078698`. The native hook is proven equivalent to the
+  game's own routine by `tests/terrain_line_equiv.c` (real routine from the
+  battle RAM run in a MIPS interpreter vs the hook: 40 000 random lines, 0
+  differences in return value, registers and RAM; a deliberately wrong hook
+  is caught every time);
 - the AOT profile of runtime-loaded modules (`aot/overlays.json`): hashes
-  recomputed from the French disc, `CHARS/ANIMS/MCAPX.MAD` and
-  `LOAD/L640V2.MGL` entry points **measured** in a French battle
-  (`dirty_ram_stats`), front-end module entries relocated
-  (`tools_rehash_aot.py`).
+  from the French disc, `CHARS/ANIMS/MCAPX.MAD` and `LOAD/L640V2.MGL` entry
+  points **measured** in a French battle (`dirty_ram_stats`);
+- the disc is LibCrypt-protected: its `.sbi` companion is required (setup
+  stops without it).
 
 ```bash
 # equivalence proof of the Fast Enemy AI hook (needs a 2 MB battle RAM dump,

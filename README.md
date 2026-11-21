@@ -1,128 +1,98 @@
-# Frontschweine Recompiled
+# Cochons de Guerre en ligne
 
-A native PC version of **Hogs of War** (German release *Frontschweine*,
-Infogrames, 2000) for the PlayStation, built by static recompilation: the
-game's MIPS code is translated to C and compiled into a Windows program that
-runs against a hardware-accurate runtime, without an emulator.
+Le jeu PlayStation **Cochons de Guerre** (*Hogs of War*, Infogrames, 2000),
+jouable à plusieurs en ligne dans le navigateur.
 
-The game plays from start to finish. On top of the original it comes with
-these enhancements:
+Le projet est basé sur le **CD français** du jeu (version PAL, référence
+**SLES-02766**), et uniquement sur lui. Le code du jeu y est traduit en C par
+recompilation statique ([psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp)),
+puis compilé en WebAssembly. Chaque joueur fait tourner le jeu dans son
+navigateur : l'IA de la version PlayStation, les textes, voix et sons
+français sont ceux du disque. Le serveur envoie le disque aux navigateurs et
+relaie les commandes des joueurs, qui jouent en lockstep : chaque navigateur
+calcule exactement la même partie.
 
-| Enhancement | Default | Effect |
-|---|---|---|
-| CPU Overclock | On, 200 % | Removes the slowdowns of the original hardware |
-| Widescreen | On, 16:9 | Wider view in battles, HUD kept at its 4:3 layout |
-| CD Audio Smoothing | On, 100 ms | Fades instead of clicks when CD audio stalls |
-| Instant Loading | On | Loads game files from an extracted copy of the disc, without waiting for the emulated drive |
-| Fast Enemy AI | On | Runs the AI's terrain line checks natively, so the picture no longer freezes while the enemy thinks |
-| 60 Hz Mode (P/N Selector) | On | Plays like the classic PAL/NTSC selector patch: 60 Hz, battles at 30 instead of 25 fps, everything 20 % faster |
+En plus du jeu original : affichage large de 4:3 à 32:9 (chaque joueur a sa
+propre forme d'écran), chargements instantanés et IA ennemie plus rapide.
 
-Each one is a mod you can switch on, off or adjust in the launcher's **Mods**
-page; widescreen also offers 21:9.
+## Démarrage
 
-Instant Loading takes over the game's own file loader: each data file is
-copied into memory at once from `extracted/` next to the program, which is
-filled from your disc the first time a file is needed. Speech, music and
-cutscenes keep streaming from the emulated drive with their original timing.
-The framework's generic CD Speed and Fast Loading mods are therefore not
-shipped with this game.
-
-Built on [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp), via
-the fork [Nero2611/psxrecomp](https://github.com/Nero2611/psxrecomp) (branch
-`frontschweine`), and
-[recomp-ui](https://github.com/RetroPortingToolKit/recomp-ui).
-
-## Cochons de Guerre online — server-side streaming
-
-[`cochons/`](cochons/README.md) builds the **French release** (*Cochons de
-Guerre*, SLES-02766) with this same recompiler and Frontschweine's tuning,
-as a native Linux program. [`stream/`](stream/README.md) runs it on a server
-and streams it (H.264 + Opus, WebCodecs) to browsers: players need neither the
-game nor an install, play with the keyboard at any resolution and any aspect
-ratio (4:3 to 21:9 rendered natively), and play together remotely on the
-shared controller (the game is turn-based).
-
-## Earlier web version — browser emulation (superseded by `stream/`)
-
-[`web/`](web/README.md) contains a browser port of the **French PlayStation
-release** (*Cochons de Guerre*, SLES-02766): the original PS1 game code runs in
-a WebAssembly PlayStation, so the PS1 enemy AI and the French text, voices and
-sounds are preserved, and up to four players can play online in deterministic
-lockstep (only pad inputs travel over the network). Each player loads their own
-disc in the browser; nothing is uploaded.
+Il vous faut votre propre copie du **CD français** : le fichier `.cue`, ses
+trois pistes `.bin` et le fichier `.sbi`, ou une archive `.zip` qui les
+contient. Le `.sbi` est indispensable : le CD français est protégé (LibCrypt)
+et, sans ce fichier, le jeu ne se comporte pas comme l'original. Aucune autre
+version du jeu n'est acceptée (le disque est vérifié).
 
 ```bash
-cd web && npm install && npm start   # http://localhost:8080
+git clone --recurse-submodules https://github.com/V1ck3s/hogs-of-war-web.git
+cd hogs-of-war-web
+# mettez votre CD dans le dossier disc/
+./start.sh
 ```
 
-## You need
+Puis ouvrez **http://localhost:8090**, créez un salon et envoyez le lien
+d'invitation à vos amis (pour jouer hors de votre réseau, le port 8090 doit
+être joignable depuis Internet).
 
-- **Your own copy of the game**: the German PAL release, serial SLES-02767,
-  as a CUE file with its three BIN tracks. The build checks the data track
-  against known checksums; other releases are not supported.
-- Windows 10 or 11 (x64)
-- [Git](https://git-scm.com/) and [Python](https://www.python.org/) 3.11 or
-  newer
+`start.sh` fait tout le reste et ne refait que ce qui manque ou a changé :
 
-The compiler toolchain (clang, CMake, Ninja) is downloaded automatically on
-the first build. No PlayStation BIOS is needed: the open-source OpenBIOS
-bundled with psxrecomp is used.
+1. extrait le CD s'il est dans une archive `.zip` ;
+2. installe les paquets système manquants (il demande avant d'utiliser
+   `sudo apt-get`) et, une seule fois, Emscripten (environ 1 Go, dans
+   `.cache/emsdk`) ;
+3. vérifie le CD, en fait une copie de travail dans `cochons/disc/` et
+   traduit le code du jeu en C (`cochons/generated/`) ;
+4. compile le jeu en WebAssembly (`cochons/build-web/`), y compris le code
+   que le jeu charge en cours de partie, reconstruit à partir du CD
+   (`cochons/tools/build_caps.py`) ;
+5. prépare les fichiers envoyés aux navigateurs (`online/game/`) et démarre
+   le serveur.
 
-## Build
+La première fois, comptez de 30 minutes à une heure selon la machine. Si le
+script est interrompu, relancez-le : il reprend où il s'était arrêté. Ensuite,
+il démarre le serveur en quelques secondes.
 
-```bash
-git clone --recursive https://github.com/Nero2611/FrontschweineRecomp.git
-cd FrontschweineRecomp
-python psxrecomp/psxrecomp_cli.py generate --project-root . --disc "path/to/Frontschweine (Germany).cue"
-python psxrecomp/psxrecomp_cli.py rebuild --project-root . --build-dir build
-```
+Système : Linux (testé sur Debian 13), 2 Go de mémoire au minimum et environ
+6 Go d'espace disque. Les paquets utilisés sont `git python3 cmake ninja-build
+clang nodejs npm xz-utils bzip2` (Python 3.11 et Node.js 18 au minimum).
 
-`generate` verifies your disc, prepares a working copy of it in `disc/` and
-translates the game code; `rebuild` compiles the program. The rebuild
-includes two short profile-guided training runs of the game for extra speed.
-Then start `build/Frontschweine_Recompiled.exe`.
+Variables utiles : `PORT` (8090), `HOST` (0.0.0.0), `CDG_JOBS` (nombre de
+compilations en parallèle ; par défaut d'après la mémoire), `EMSDK` (un
+Emscripten déjà installé), `CDG_BUILD_ONLY=1` (tout préparer sans démarrer le
+serveur), `CDG_YES=1` (installer les paquets sans demander).
 
-The battle modules the game unpacks at runtime are compiled ahead of time by
-`generate`, from your disc. Other code the game loads at runtime is translated
-in the background the first time it runs and cached in `build/cache/`.
+## Contenu du dépôt
 
-**If `rebuild` warns** `overlay toolchain staging failed; overlays will run
-interpreted`, the Tiny C Compiler archive could not be downloaded from
-`download.savannah.gnu.org` or its mirrors. Fetch `tcc-0.9.27-win64-bin.zip`
-from any GNU mirror (for example
-[mirror.netcologne.de](https://mirror.netcologne.de/savannah/tinycc/)), place
-it in `.cache/overlay-toolchain/` and run `rebuild` again. Its checksum is
-verified against the pinned value, so any mirror is safe.
+| Dossier | Rôle |
+|---|---|
+| `cochons/` | configuration de la recompilation du CD français (adresses, correctifs, mods) |
+| `online/` | serveur de jeu et page web (lockstep, streaming du disque, tests) |
+| `psxrecomp/` | le moteur de recompilation et d'exécution (sous-module, branche `psxrecomp` de ce dépôt) |
+| `web/`, `stream/` | essais précédents (émulation dans le navigateur, streaming vidéo), remplacés par `online/` |
 
-## Setup package
+Les dossiers `disc/`, `cochons/disc/`, `cochons/generated/`, `cochons/build*/`,
+`online/game/` et `.cache/` sont produits à partir de votre CD et ne sont
+jamais versionnés.
 
-Instead of cloning, you can download the setup zip from the
-[Releases](https://github.com/Nero2611/FrontschweineRecomp/releases) page. It
-contains the setup program and the project sources, but no game data and no
-translated game code. You need [Python](https://www.python.org/) 3.11 or
-newer. Unpack the zip, start `Frontschweine_Recompiled.exe`, select your disc
-and follow the **Generate & rebuild** wizard; it downloads the compiler
-toolchain and builds the game on your machine.
+## Mentions légales
 
-## Legal
+Ce dépôt ne contient aucune donnée du jeu : pas d'image disque, pas de code
+exécutable ni de ressources du jeu original, pas de BIOS PlayStation (le BIOS
+libre OpenBIOS fourni avec psxrecomp est utilisé). Le code traduit est produit
+sur votre machine à partir de votre propre CD.
 
-This repository contains no game data: no disc image, no executable code and
-no assets of the original game, and no PlayStation BIOS. The translated code
-is produced locally from your own disc and never leaves your machine.
+*Hogs of War* et *Cochons de Guerre* sont des marques de leurs propriétaires
+respectifs ; PlayStation est une marque de Sony Interactive Entertainment. Ce
+projet est un projet de fan, non officiel et non commercial, sans lien avec
+eux.
 
-*Hogs of War* and *Frontschweine* are trademarks of their respective owners;
-PlayStation is a trademark of Sony Interactive Entertainment. This is an
-unofficial, non-commercial fan project and is not affiliated with or endorsed
-by any of them.
+## Licence
 
-## License
+[PolyForm Noncommercial License 1.0.0](LICENSE) : vous pouvez utiliser,
+modifier et partager ce projet pour tout usage non commercial. Le moteur
+psxrecomp est publié séparément sous les mêmes conditions par son auteur.
 
-[PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change and
-share this project for any non-commercial purpose. The psxrecomp framework is
-licensed separately under the same terms by its author.
+## Crédits
 
-## Credits
-
-- [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp) by Matthew
-  Stanley and the RetroPortingToolKit team, PolyForm Noncommercial 1.0.0
-- [recomp-ui](https://github.com/RetroPortingToolKit/recomp-ui), the launcher
+- [psxrecomp](https://github.com/RetroPortingToolKit/psxrecomp), de Matthew
+  Stanley et de l'équipe RetroPortingToolKit, PolyForm Noncommercial 1.0.0
