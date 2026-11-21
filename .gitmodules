@@ -1,7 +1,7 @@
 [submodule "psxrecomp"]
 	path = psxrecomp
-	url = https://github.com/Nero2611/psxrecomp.git
-	branch = frontschweine
+	url = ../hogs-of-war-web.git
+	branch = psxrecomp
 [submodule "recomp-ui"]
 	path = recomp-ui
 	url = https://github.com/RetroPortingToolKit/recomp-ui.git
