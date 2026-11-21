@@ -106,7 +106,7 @@ if ! have emcc; then
     if [ -z "${EMSDK:-}" ]; then
         EMSDK=$ROOT/.cache/emsdk
         if [ ! -f "$EMSDK/upstream/.emsdk_version" ]; then
-            say "Installation d'Emscripten $EMSDK_VERSION (une seule fois, environ 1 Go)"
+            say "Installation d'Emscripten $EMSDK_VERSION (une seule fois, environ 2 Go)"
             [ -d "$EMSDK/.git" ] || git clone https://github.com/emscripten-core/emsdk.git "$EMSDK"
             "$EMSDK/emsdk" install "$EMSDK_VERSION"
             "$EMSDK/emsdk" activate "$EMSDK_VERSION" >/dev/null
@@ -123,7 +123,6 @@ fi
 stale_generate() {
     [ -f "$MARKER" ] || return 0
     [ -f "$COCHONS/disc/SLES_027.66" ] || return 0
-    ls "$COCHONS"/disc/*.sbi >/dev/null 2>&1 || return 0
     for f in "$COCHONS/game.toml" "$COCHONS/aot/overlays.json" "$COCHONS/symbols.toml"; do
         [ "$f" -nt "$MARKER" ] && return 0
     done
@@ -135,18 +134,29 @@ if stale_generate; then
         --config cochons/game.toml --disc "$ROOT/$CUE"
 fi
 
+# La copie de travail du CD garde son .sbi (une copie faite avant que le .sbi
+# soit fourni n'en a pas : generate la réutilise telle quelle).
+WORK_CUE=$(find_cue "$COCHONS/disc")
+[ -n "$WORK_CUE" ] || fail "generate n'a pas préparé de copie du CD dans cochons/disc/"
+cmp -s "$SBI" "${WORK_CUE%.*}.sbi" || cp "$SBI" "${WORK_CUE%.*}.sbi"
+
 # ---------------------------------------------------------------- compilation
 # La configuration compile aussi, depuis le CD, le code que le jeu charge en
-# cours de partie (cochons/tools/build_caps.py), s'il manque.
-say "Configuration de la compilation WebAssembly"
-mkdir -p .cache
-emcmake cmake -S cochons -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DPSX_SDL_BACKEND=SDL2 -DPSX_DEBUG_TOOLS=OFF -DPSX_REWIND=OFF \
-    -DPSX_VULKAN=OFF -DPSX_NETPLAY=OFF > "$ROOT/.cache/configure-web.log" 2>&1 \
-    || { tail -n 40 "$ROOT/.cache/configure-web.log"; fail "la configuration a échoué (journal : .cache/configure-web.log)"; }
-grep -E '^(capture units|building the capture)|CMake Warning.*capture' "$ROOT/.cache/configure-web.log" || true
+# cours de partie (cochons/tools/build_caps.py), s'il manque. Elle n'est
+# lancée ici que la première fois et après une nouvelle traduction : ensuite,
+# la compilation se reconfigure d'elle-même quand ses entrées changent (la
+# relancer à chaque fois referait l'édition de liens).
+if [ ! -f "$BUILD/build.ninja" ] || [ "$MARKER" -nt "$BUILD/build.ninja" ]; then
+    say "Configuration de la compilation WebAssembly"
+    mkdir -p .cache
+    emcmake cmake -S cochons -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DPSX_SDL_BACKEND=SDL2 -DPSX_DEBUG_TOOLS=OFF -DPSX_REWIND=OFF \
+        -DPSX_VULKAN=OFF -DPSX_NETPLAY=OFF > "$ROOT/.cache/configure-web.log" 2>&1 \
+        || { tail -n 40 "$ROOT/.cache/configure-web.log"; fail "la configuration a échoué (journal : .cache/configure-web.log)"; }
+    grep -E '^(capture units|building the capture)|CMake Warning.*capture' "$ROOT/.cache/configure-web.log" || true
+fi
 
-say "Compilation du jeu ($CDG_JOBS en parallèle ; 30 à 60 minutes la première fois)"
+say "Compilation du jeu ($CDG_JOBS en parallèle ; 20 à 60 minutes la première fois)"
 cmake --build "$BUILD" -j "$CDG_JOBS"
 
 # ---------------------------------------------------------------- fichiers servis
@@ -156,7 +166,8 @@ if [ ! -d node_modules/ws ]; then
     npm install --omit=dev --no-audit --no-fund
 fi
 if [ ! -f game/files.json ] || [ "$BUILD/Cochons_de_Guerre.wasm" -nt game/files.json ] \
-   || [ "$BUILD/game.toml" -nt game/files.json ]; then
+   || [ "$BUILD/game.toml" -nt game/files.json ] \
+   || [ -n "$(find "$COCHONS/disc" -newer game/files.json -print -quit)" ]; then
     say "Préparation des fichiers envoyés aux navigateurs"
     node tools/prepare.mjs
 fi

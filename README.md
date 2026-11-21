@@ -38,7 +38,7 @@ d'invitation à vos amis (pour jouer hors de votre réseau, le port 8090 doit
 
 1. extrait le CD s'il est dans une archive `.zip` ;
 2. installe les paquets système manquants (il demande avant d'utiliser
-   `sudo apt-get`) et, une seule fois, Emscripten (environ 1 Go, dans
+   `sudo apt-get`) et, une seule fois, Emscripten (environ 2 Go, dans
    `.cache/emsdk`) ;
 3. vérifie le CD, en fait une copie de travail dans `cochons/disc/` et
    traduit le code du jeu en C (`cochons/generated/`) ;
@@ -48,7 +48,7 @@ d'invitation à vos amis (pour jouer hors de votre réseau, le port 8090 doit
 5. prépare les fichiers envoyés aux navigateurs (`online/game/`) et démarre
    le serveur.
 
-La première fois, comptez de 30 minutes à une heure selon la machine. Si le
+La première fois, comptez de 20 minutes à une heure selon la machine. Si le
 script est interrompu, relancez-le : il reprend où il s'était arrêté. Ensuite,
 il démarre le serveur en quelques secondes.
 
