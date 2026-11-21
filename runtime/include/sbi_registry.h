@@ -2,4 +2,5 @@
 #pragma once
 static constexpr SbiRequirement kSbiRequirements[] = {
     {712491360ULL, "dc3f29d7f7046fbdc85e8c376721a8880567f0cda309a52ee5da875ae9e40157", "ada8877a2a964eff2743d53cc043be0b7b148469b60de82fd1069f32700670eb", "Resident Evil 3: Nemesis", "SLES-02529"},
+    {386236032ULL, "c0e17cdaf8a0d2c0ebeb0294c00624e56b8db8a5da5b1a4dc3624850b065563c", "49ca8c6321f08584f028fc9de517a95b99105cf4ac72d058dd1fed79bd23044a", "Cochons de Guerre", "SLES-02766"},
 };

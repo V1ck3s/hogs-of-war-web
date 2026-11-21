@@ -27,7 +27,7 @@ Concurrent preparation into the same directory is unsupported.
 
 The registry in `tools/disc_companion.py` requires both measured main-track size and SHA-1.
 It does not infer protection from a region, filename, or configured serial.
-The initial supported identity is:
+The supported identities are:
 
 | Field | Measured identity |
 |---|---|
@@ -37,7 +37,14 @@ The initial supported identity is:
 | Main-track SHA-1 | `b3ec6631e1c9ed3b0f554b3a5f61166bac8ebb9d` |
 | Qualified SBI SHA-256 | `ada8877a2a964eff2743d53cc043be0b7b148469b60de82fd1069f32700670eb` |
 
-For that identity, a missing or different SBI stops setup with an actionable error.
+| Title / serial | Cochons de Guerre / SLES-02766 |
+|---|---|
+| Revision key | France; exact data track below, no claim for other pressings |
+| Main-track size | `386236032` bytes |
+| Main-track SHA-1 | `ccd4b6ea6fa454fa367ae871a7879e31f87f75a8` |
+| Qualified SBI SHA-256 | `49ca8c6321f08584f028fc9de517a95b99105cf4ac72d058dd1fed79bd23044a` |
+
+For these identities, a missing or different SBI stops setup with an actionable error.
 `--skip-hash-check` does not bypass the companion gate.
 The matching companion must also pass the supported nonempty SBI type-1 record checks.
 A different valid SBI representation needs maintainer qualification before this gate accepts it.

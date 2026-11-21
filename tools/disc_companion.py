@@ -24,6 +24,15 @@ REQUIRED_SBI = {
         "sbi_sha256": "ada8877a2a964eff2743d53cc043be0b7b148469b60de82fd1069f32700670eb",
         "evidence": "RE3 same-executable operator acceptance, 2026-09-05; docs/DISC_COMPANIONS.md",
     },
+    (386236032, "ccd4b6ea6fa454fa367ae871a7879e31f87f75a8"): {
+        "title": "Cochons de Guerre",
+        "serial": "SLES-02766",
+        "data_sha256": "c0e17cdaf8a0d2c0ebeb0294c00624e56b8db8a5da5b1a4dc3624850b065563c",
+        "revision": "France, data-track SHA-1 ccd4b6ea6fa454fa367ae871a7879e31f87f75a8",
+        "sbi_sha256": "49ca8c6321f08584f028fc9de517a95b99105cf4ac72d058dd1fed79bd23044a",
+        "evidence": "LibCrypt: without the SBI the game state diverges from a session played with it "
+                    "within 600 frames (recorded online session replayed), 2026-11-21",
+    },
 }
 
 
