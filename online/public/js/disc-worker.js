@@ -16,7 +16,7 @@ let running = 0;
 let tracks = [];           // chunk counts per track
 const cached = new Set();  // URLs now in the browser cache
 let hotUrls = [];          // the preload list
-// Progress of the preload list, for the page (lobby: "préchargement 40 %").
+// Progress of the preload list, for the page (lobby: "preloading 40%").
 let reported = -1;
 function report() {
   if (!hotUrls.length) return;

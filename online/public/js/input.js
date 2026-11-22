@@ -6,9 +6,9 @@ export const BIT = {
 
 // Labels follow the game's own "CONFIGURATION MANETTE" screen.
 export const ACTIONS = [
-  ['up', 'Haut (se déplacer / viser)'], ['down', 'Bas (se déplacer / viser)'], ['left', 'Gauche (se déplacer / viser)'], ['right', 'Droite (se déplacer / viser)'],
-  ['cross', 'Action / tirer (✕)'], ['circle', 'Menu des armes (○)'], ['square', 'Sauter (□)'], ['triangle', 'Annuler (△)'],
-  ['l1', 'Caméra (L1)'], ['l2', 'Caméra (L2)'], ['r1', 'Viser — haut (R1)'], ['r2', 'Viser — bas (R2)'],
+  ['up', 'Up (move / aim)'], ['down', 'Down (move / aim)'], ['left', 'Left (move / aim)'], ['right', 'Right (move / aim)'],
+  ['cross', 'Action / fire (✕)'], ['circle', 'Weapons menu (○)'], ['square', 'Jump (□)'], ['triangle', 'Cancel (△)'],
+  ['l1', 'Camera (L1)'], ['l2', 'Camera (L2)'], ['r1', 'Aim — up (R1)'], ['r2', 'Aim — down (R2)'],
   ['start', 'Pause (Start)'], ['select', 'Select'],
 ];
 
@@ -91,8 +91,8 @@ export const layoutReady = (navigator.keyboard && navigator.keyboard.getLayoutMa
 export function keyLabel(code) {
   if (!code) return '—';
   const named = {
-    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Entrée', NumpadEnter: 'Entrée (pavé)', Space: 'Espace',
-    Escape: 'Échap', Tab: 'Tab', Backspace: 'Retour arr.', ShiftLeft: 'Maj g.', ShiftRight: 'Maj d.', ControlLeft: 'Ctrl g.', ControlRight: 'Ctrl d.',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Enter', NumpadEnter: 'Enter (keypad)', Space: 'Space',
+    Escape: 'Esc', Tab: 'Tab', Backspace: 'Backspace', ShiftLeft: 'Left Shift', ShiftRight: 'Right Shift', ControlLeft: 'Left Ctrl', ControlRight: 'Right Ctrl',
   };
   if (named[code]) return named[code];
   const l = layout && layout.get(code);

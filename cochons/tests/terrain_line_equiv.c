@@ -53,7 +53,7 @@ static int interp(CPUState* c) {
             case 37: if (rd) r[rd] = r[rs] | r[rt]; break;
             case 42: if (rd) r[rd] = (int32_t)r[rs] < (int32_t)r[rt]; break;
             case 43: if (rd) r[rd] = r[rs] < r[rt]; break;
-            default: fprintf(stderr, "SPECIAL %u non géré à %08x\n", w & 63, pc); return 0;
+            default: fprintf(stderr, "SPECIAL %u not handled at %08x\n", w & 63, pc); return 0;
             }
             break;
         case 1:
@@ -77,7 +77,7 @@ static int interp(CPUState* c) {
         case 35: if (rt) r[rt] = psx_mod_read_word(r[rs] + imm); break;
         case 37: if (rt) r[rt] = psx_mod_read_half(r[rs] + imm); break;                     /* lhu */
         case 43: psx_mod_write_word(r[rs] + imm, r[rt]); break;
-        default: fprintf(stderr, "opcode %u non géré à %08x\n", op, pc); return 0;
+        default: fprintf(stderr, "opcode %u not handled at %08x\n", op, pc); return 0;
         }
         if (branch) {
             /* execute the delay slot */
@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
         int ok = interp(&b);
         mem = hook_mem;
         total_steps += steps;
-        if (!ok || !returned) { fprintf(stderr, "cas %ld: exécution incomplète\n", i); bad++; continue; }
+        if (!ok || !returned) { fprintf(stderr, "case %ld: incomplete execution\n", i); bad++; continue; }
         b.pc = b.gpr[31];
         int diff = memcmp(a.gpr, b.gpr, sizeof a.gpr) != 0 || memcmp(hook_mem, ref_mem, RAM_SIZE) != 0;
         if ((int32_t)b.gpr[2] < 0) blocked++;
@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
             bad++;
         }
     }
-    printf("%ld cas, %ld lignes bloquées, %ld écarts, %.0f instructions MIPS par appel en moyenne\n",
+    printf("%ld cases, %ld blocked lines, %ld differences, %.0f MIPS instructions per call on average\n",
            n, blocked, bad, (double)total_steps / n);
     return bad ? 1 : 0;
 }

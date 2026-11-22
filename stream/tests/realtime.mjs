@@ -24,7 +24,7 @@ const env = {
 };
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let log = '';
-srv.stdout.on('data', (d) => { log += d; if (!/ffmpeg/.test(d)) process.stdout.write('[serveur] ' + d); });
+srv.stdout.on('data', (d) => { log += d; if (!/ffmpeg/.test(d)) process.stdout.write('[server] ' + d); });
 await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -39,17 +39,17 @@ const browser = await puppeteer.launch({
 const host = await browser.newPage();
 await host.setViewport({ width: 1280, height: 720 });
 await host.goto(`http://localhost:${PORT}/`);
-await host.$eval('#name', (el) => { el.value = 'Hôte'; });
+await host.$eval('#name', (el) => { el.value = 'Host'; });
 await host.select('#lobby-quality', process.env.RT_QUALITY || '480p');
 await host.click('#btn-create');
 await host.waitForFunction(() => window.__cdg.room?.state === 'running', { timeout: 180000 });
 const code = await host.evaluate(() => window.__cdg.room.code);
-check(/entrées : XTest/.test(log), 'build de production : entrées clavier par XTest, sans port de contrôle');
+check(/inputs: XTest/.test(log), 'production build: keyboard inputs through XTest, no control port');
 const guest = await browser.newPage();
 await guest.setViewport({ width: 1280, height: 800 });
-await guest.goto(`http://localhost:${PORT}/#salon=${code}`);
+await guest.goto(`http://localhost:${PORT}/#room=${code}`);
 await guest.evaluate(() => { window.__cdgRecord = true; });
-await guest.$eval('#name', (el) => { el.value = 'Invité'; });
+await guest.$eval('#name', (el) => { el.value = 'Guest'; });
 await guest.click('#btn-join');
 await guest.waitForFunction(() => window.__cdg.stats.videoTotal > 10, { timeout: 120000 });
 const t0 = Date.now();
@@ -61,12 +61,12 @@ const g = await guest.evaluate(() => ({ video: window.__cdg.stats.videoTotal, un
 const glog = fs.readFileSync(`/tmp/cochons-stream/${code}/game.log`, 'utf8');
 const hz = [...glog.matchAll(/runtime cadence: guest=([0-9.]+) Hz/g)].map((m) => +m[1]).slice(2);
 const avg = hz.reduce((a, b) => a + b, 0) / hz.length;
-console.log(`      cadence du jeu (Hz, toutes les 5 s) : ${hz.map((h) => h.toFixed(1)).join(' ')}`);
-check(hz.length > 5 && Math.min(...hz) >= 47 && avg >= 49.5, `le jeu tient le temps réel en streaming : moyenne ${avg.toFixed(2)} Hz, minimum ${Math.min(...hz).toFixed(1)} Hz (50 Hz PAL)`);
+console.log(`      game cadence (Hz, every 5 s): ${hz.map((h) => h.toFixed(1)).join(' ')}`);
+check(hz.length > 5 && Math.min(...hz) >= 47 && avg >= 49.5, `the game keeps real time while streaming: average ${avg.toFixed(2)} Hz, minimum ${Math.min(...hz).toFixed(1)} Hz (50 Hz PAL)`);
 const audioSec = g.audio / 48000;
-check(audioSec >= wall * 0.95, `son reçu par l’invité : ${audioSec.toFixed(1)} s pour ${wall.toFixed(1)} s écoulées`);
-check(g.under <= 3, `lecture audio de l’invité sans coupure (${g.under} sous-alimentation(s))`);
-console.log(`      vidéo reçue par l’invité : ${(g.video / wall).toFixed(1)} img/s`);
+check(audioSec >= wall * 0.95, `sound received by the guest: ${audioSec.toFixed(1)} s for ${wall.toFixed(1)} s elapsed`);
+check(g.under <= 3, `guest audio playback without dropouts (${g.under} underrun(s))`);
+console.log(`      video received by the guest: ${(g.video / wall).toFixed(1)} fps`);
 // Audio as WAV for the language check.
 const b64 = await guest.evaluate(() => {
   const chunks = window.__cdg.recorded || [];
@@ -82,15 +82,15 @@ const h = Buffer.alloc(44);
 h.write('RIFF', 0); h.writeUInt32LE(36 + data.length, 4); h.write('WAVEfmt ', 8); h.writeUInt32LE(16, 16);
 h.writeUInt16LE(1, 20); h.writeUInt16LE(2, 22); h.writeUInt32LE(48000, 24); h.writeUInt32LE(192000, 28);
 h.writeUInt16LE(4, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(data.length, 40);
-fs.writeFileSync(path.join(out, 'son_invite.wav'), Buffer.concat([h, data]));
+fs.writeFileSync(path.join(out, 'guest_sound.wav'), Buffer.concat([h, data]));
 // Keyboard through XTest: the host presses Start until the main menu shows.
 await host.bringToFront();
-await host.screenshot({ path: path.join(out, 'avant_start.png') });
+await host.screenshot({ path: path.join(out, 'before_start.png') });
 for (let i = 0; i < 6; i++) { await host.keyboard.down('Enter'); await sleep(200); await host.keyboard.up('Enter'); await sleep(2500); }
-await host.screenshot({ path: path.join(out, 'hote_apres_start.png') });
-await guest.screenshot({ path: path.join(out, 'invite_apres_start.png') });
+await host.screenshot({ path: path.join(out, 'host_after_start.png') });
+await guest.screenshot({ path: path.join(out, 'guest_after_start.png') });
 await browser.close();
 srv.kill('SIGTERM');
 await sleep(4000);
-console.log(failures ? `${failures} échec(s)` : 'Tous les contrôles temps réel sont passés.');
+console.log(failures ? `${failures} failure(s)` : 'All real-time checks passed.');
 process.exit(failures ? 1 : 0);

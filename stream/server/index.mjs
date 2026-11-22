@@ -1,4 +1,4 @@
-// Cochons de Guerre — serveur de jeu en streaming.
+// Cochons de Guerre — streaming game server.
 //
 // The game (native recompiled French PS1 code, see ../../cochons) runs here,
 // one instance per room. Clients receive H.264 video + Opus audio over a
@@ -113,7 +113,7 @@ function sendBinary(room, buf, { videoOnly = false } = {}) {
 
 async function createRoom(c, opts) {
   if (rooms.size >= MAX_ROOMS) {
-    sendJson(c, { t: 'error', message: `Le serveur est complet (${MAX_ROOMS} partie(s) en cours). Rejoignez un salon existant.` });
+    sendJson(c, { t: 'error', message: `The server is full (${MAX_ROOMS} game(s) running). Join an existing room.` });
     return;
   }
   const code = newCode();
@@ -125,7 +125,7 @@ async function createRoom(c, opts) {
   rooms.set(code, room);
   c.room = code;
   broadcastRoom(room);
-  log(`salon ${code} créé par ${c.name}`);
+  log(`room ${code} created by ${c.name}`);
   const workDir = path.join(WORK_ROOT, code);
   fs.rmSync(workDir, { recursive: true, force: true });
   const game = new GameInstance({
@@ -148,30 +148,30 @@ async function createRoom(c, opts) {
     }
   });
   game.on('audio', (pkt) => sendBinary(room, audioPacket(pkt)));
-  game.on('exit', () => { room.state = 'stopped'; room.error = 'Le jeu s’est arrêté.'; broadcastRoom(room); });
+  game.on('exit', () => { room.state = 'stopped'; room.error = 'The game has stopped.'; broadcastRoom(room); });
   try {
     await game.start();
     room.state = 'running';
-    log(`salon ${code} : jeu lancé (${game.display}, ${game.size().w}x${game.size().h})`);
+    log(`room ${code}: game started (${game.display}, ${game.size().w}x${game.size().h})`);
   } catch (e) {
     room.state = 'stopped';
-    room.error = 'Impossible de lancer le jeu : ' + e.message;
-    log(`salon ${code} : ${room.error}`);
+    room.error = 'Could not start the game: ' + e.message;
+    log(`room ${code}: ${room.error}`);
   }
   broadcastRoom(room);
 }
 
 function joinRoom(c, code) {
   const room = rooms.get(String(code || '').toUpperCase().trim());
-  if (!room) { sendJson(c, { t: 'error', message: 'Salon introuvable.' }); return; }
-  if (room.members.length >= MAX_MEMBERS) { sendJson(c, { t: 'error', message: 'Salon complet.' }); return; }
+  if (!room) { sendJson(c, { t: 'error', message: 'Room not found.' }); return; }
+  if (room.members.length >= MAX_MEMBERS) { sendJson(c, { t: 'error', message: 'Room full.' }); return; }
   leaveRoom(c);
   room.members.push(c.id);
   c.room = room.code;
   c.needKey = true;
   if (room.game && room.game.videoConfig) sendJson(c, { t: 'video', ...room.game.videoConfig });
   broadcastRoom(room);
-  log(`${c.name} rejoint ${room.code}`);
+  log(`${c.name} joined ${room.code}`);
 }
 
 function leaveRoom(c) {
@@ -181,7 +181,7 @@ function leaveRoom(c) {
   room.members = room.members.filter((id) => id !== c.id);
   room.arbiter.remove(c.id);
   if (!room.members.length) {
-    log(`salon ${room.code} fermé`);
+    log(`room ${room.code} closed`);
     rooms.delete(room.code);
     if (room.game) { closing.add(room); room.game.stop().finally(() => closing.delete(room)); }
     return;
@@ -195,7 +195,7 @@ async function onMessage(c, m) {
   const isHost = room && room.host === c.id;
   switch (m.t) {
     case 'hello':
-      c.name = String(m.name || 'Cochon').slice(0, 24) || 'Cochon';
+      c.name = String(m.name || 'Hog').slice(0, 24) || 'Hog';
       sendJson(c, { t: 'welcome', id: c.id, rooms: [...rooms.values()].map((r) => ({ code: r.code, members: r.members.length })), maxRooms: MAX_ROOMS });
       return;
     case 'create': return createRoom(c, m);
@@ -215,7 +215,7 @@ async function onMessage(c, m) {
         const aspect = Math.max(0.5, Math.min(4, +m.aspect || 16 / 9));
         if (await room.game.reshape({ aspect })) {
           const { w, h } = room.game.size();
-          log(`salon ${room.code} : image ${w}x${h} (écran de l’hôte ${aspect.toFixed(2)}:1)`);
+          log(`room ${room.code}: picture ${w}x${h} (host screen ${aspect.toFixed(2)}:1)`);
           broadcastRoom(room);
         }
       }
@@ -245,14 +245,14 @@ async function onMessage(c, m) {
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 wss.on('connection', (ws) => {
-  const c = { id: newId(), ws, name: 'Cochon', room: null, needKey: true, alive: true, spectator: false };
+  const c = { id: newId(), ws, name: 'Hog', room: null, needKey: true, alive: true, spectator: false };
   clients.set(c.id, c);
   ws.on('pong', () => { c.alive = true; });
   ws.on('message', (data, bin) => {
     if (bin) return;
     let m;
     try { m = JSON.parse(data); } catch { return; }
-    if (m && typeof m.t === 'string') onMessage(c, m).catch((e) => log('erreur', e));
+    if (m && typeof m.t === 'string') onMessage(c, m).catch((e) => log('error', e));
   });
   ws.on('close', () => { leaveRoom(c); clients.delete(c.id); });
 });
@@ -272,6 +272,6 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 if (!fs.existsSync(path.join(GAME_DIR, GAME_BIN))) {
-  console.error(`Exécutable du jeu introuvable : ${path.join(GAME_DIR, GAME_BIN)} (voir README, CDG_GAME_DIR / CDG_GAME_BIN)`);
+  console.error(`Game executable not found: ${path.join(GAME_DIR, GAME_BIN)} (see README, CDG_GAME_DIR / CDG_GAME_BIN)`);
 }
-server.listen(PORT, HOST, () => log(`Cochons de Guerre — streaming : ${TLS ? 'https' : 'http'}://localhost:${PORT}/  (jeu : ${GAME_DIR})`));
+server.listen(PORT, HOST, () => log(`Cochons de Guerre — streaming: ${TLS ? 'https' : 'http'}://localhost:${PORT}/  (game: ${GAME_DIR})`));

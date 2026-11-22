@@ -36,7 +36,7 @@ async function loadDisc({ files, entry, options, verbose }) {
   M.FS.mount(M.WORKERFS, { blobs: files.map((f) => ({ name: f.name, data: f.file })) }, '/disc');
   setOptions(options);
   const ok = M.ccall('fe_load', 'number', ['string'], ['/disc/' + entry]);
-  if (!ok) throw new Error('Le cœur n’a pas pu charger le disque.');
+  if (!ok) throw new Error('The core could not load the disc.');
   loaded = true;
   return {
     fps: M._fe_fps(), sampleRate: M._fe_sample_rate(), aspect: M._fe_aspect(),
@@ -79,7 +79,7 @@ function saveState() {
   const ok = M._fe_state_save(p, n);
   const out = bytesFromHeap(p, n);
   M._free(p);
-  if (!ok) throw new Error('échec de la sauvegarde d’état');
+  if (!ok) throw new Error('state save failed');
   return out;
 }
 
@@ -89,7 +89,7 @@ function loadState(buf) {
   M.HEAPU8.set(u8, p);
   const ok = M._fe_state_load(p, u8.length);
   M._free(p);
-  if (!ok) throw new Error('échec du chargement d’état');
+  if (!ok) throw new Error('state load failed');
 }
 
 const RETRO_MEMORY_SAVE_RAM = 0;
@@ -160,7 +160,7 @@ self.onmessage = async (ev) => {
         post({ type: 'ok', id: m.id });
         break;
       default:
-        throw new Error('message inconnu ' + m.type);
+        throw new Error('unknown message ' + m.type);
     }
   } catch (e) {
     post({ type: 'error', id: m.id, message: String(e && e.message || e) });

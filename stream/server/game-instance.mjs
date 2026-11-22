@@ -61,7 +61,7 @@ function freeDisplay() {
     const n = 100 + (displayCounter++ % 100);
     if (!fs.existsSync(`/tmp/.X${n}-lock`) && !fs.existsSync(`/tmp/.X11-unix/X${n}`)) return n;
   }
-  throw new Error('aucun écran virtuel libre');
+  throw new Error('no free virtual display');
 }
 
 export class GameInstance extends EventEmitter {
@@ -115,7 +115,7 @@ export class GameInstance extends EventEmitter {
     this.control = await this.probeControl();
     this.audioSource = process.env.CDG_AUDIO_SOURCE || (this.control ? 'spu' : 'pulse');
     if (this.control) this.sendPad(0xffff); else this.startXkeys();
-    this.log(`entrées : ${this.control ? 'port de contrôle' : 'XTest'} ; son : ${this.audioSource}`);
+    this.log(`inputs: ${this.control ? 'control port' : 'XTest'}; sound: ${this.audioSource}`);
     this.startVideo();
     this.startAudio();
     this.emit('ready');
@@ -129,7 +129,7 @@ export class GameInstance extends EventEmitter {
       if (fs.existsSync(`/tmp/.X11-unix/X${this.n}`)) return;
       await sleep(100);
     }
-    throw new Error('Xvfb ne démarre pas');
+    throw new Error('Xvfb does not start');
   }
 
   async startAudioSink() {
@@ -228,7 +228,7 @@ export class GameInstance extends EventEmitter {
     this.procs.game.stdout.pipe(logFile);
     this.procs.game.stderr.pipe(logFile);
     this.procs.game.on('exit', (code) => {
-      if (!this.stopped) { this.log(`jeu terminé (code ${code})`); this.emit('exit', code); }
+      if (!this.stopped) { this.log(`game exited (code ${code})`); this.emit('exit', code); }
     });
   }
 
@@ -322,7 +322,7 @@ export class GameInstance extends EventEmitter {
       if (id) return id;
       await sleep(200);
     }
-    throw new Error('fenêtre du jeu introuvable');
+    throw new Error('game window not found');
   }
 
   async placeWindow() {
@@ -357,7 +357,7 @@ export class GameInstance extends EventEmitter {
       this.emit('video', au, key);
     });
     p.stdout.on('data', (d) => split.push(d));
-    p.stderr.on('data', (d) => this.log('[ffmpeg vidéo] ' + String(d).trim()));
+    p.stderr.on('data', (d) => this.log('[ffmpeg video] ' + String(d).trim()));
     p.on('exit', () => { if (!this.stopped && this.procs.video === p) setTimeout(() => this.startVideo(), 500); });
   }
 

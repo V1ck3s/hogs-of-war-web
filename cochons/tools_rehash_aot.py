@@ -33,7 +33,7 @@ for img in prof['images']:
         base = int(item['load_addr'], 16)
         ents = [int(e, 16) for e in item.get('entries', [])]
         if not ents:
-            print(f"{item['file']}: {len(body)} B, pas de points d'entrée"); continue
+            print(f"{item['file']}: {len(body)} B, no entry points"); continue
         votes = Counter()
         for e in ents:
             for d in range(-0x400, 0x401, 4):
@@ -41,6 +41,6 @@ for img in prof['images']:
                     votes[d] += 1
         best, n = votes.most_common(1)[0] if votes else (0, 0)
         kept = [f"0x{e + best:08X}" for e in ents if prologue(body, e - base + best)]
-        print(f"{item['file']}: {len(body)} B, décalage {best:+#x}, {len(kept)}/{len(ents)} points d'entrée")
+        print(f"{item['file']}: {len(body)} B, offset {best:+#x}, {len(kept)}/{len(ents)} entry points")
         item['entries'] = kept
 json.dump(prof, open(dst, 'w'), indent=2)

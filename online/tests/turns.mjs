@@ -19,7 +19,7 @@ const out = path.resolve(process.argv[2] || 'join-out');
 fs.mkdirSync(out, { recursive: true });
 const PORT = 18300 + Math.floor(Math.random() * 90);
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], { env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit'] });
-srv.stdout.on('data', (d) => process.stdout.write('[serveur] ' + d));
+srv.stdout.on('data', (d) => process.stdout.write('[server] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -33,11 +33,11 @@ async function browser(name, q, aspect) {
   });
   const page = await b.newPage();
   await page.setViewport({ width: 1100, height: 620 });
-  page.on('console', (m) => { const t = m.text(); if (name === 'Alice' || /désynchro|error|snapshot|savestate: (LOAD|SAVE)|\[partie\]|\[lockstep\]/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
+  page.on('console', (m) => { const t = m.text(); if (name === 'Alice' || /desync|error|snapshot|savestate: (LOAD|SAVE)|\[game\]|\[lockstep\]/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.RASTER === "1" ? "&raster=1" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.RASTER === "1" ? "&raster=1" : ""}${roomCode ? '&room=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
-  await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+  await page.waitForFunction(() => /ready|disc|unavailable/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
   return { b, page, name };
 }
@@ -57,7 +57,7 @@ await guest.page.click('#btn-join');
 await guest.page.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2, { timeout: 30000 });
 await host.page.click('#btn-start');
 await Promise.all([host, guest].map((x) => x.page.waitForFunction(() => document.querySelector('#splash').hidden, { timeout: 120000 })));
-check(true, `salon ${roomCode} en mode Multijoueur : Alice et Bruno ont lancé leur copie`);
+check(true, `room ${roomCode} in Multiplayer mode: Alice and Bruno started their copies`);
 
 const frameOf = async () => (await info(host.page)).frame;
 async function untilFrame(f) { while (await frameOf() < f) await sleep(300); }
@@ -78,16 +78,16 @@ for (;;) {
   if (v.f > 6000) break;
   await sleep(100);
 }
-check([...seen].every((m) => m === LEVEL.toString(16)), `aucun autre menu avant la sélection de niveau (menus vus : ${[...seen].join(', ')})`);
+check([...seen].every((m) => m === LEVEL.toString(16)), `no other menu before the level select (menus seen: ${[...seen].join(', ')})`);
 await untilFrame((await frameOf()) + 60);
-await host.page.screenshot({ path: path.join(out, '1_niveau_alice.png') });
-await guest.page.screenshot({ path: path.join(out, '1_niveau_bruno.png') });
-console.log('      sélection de niveau atteinte à l’image', await frameOf(), '(capture 1_niveau_*)');
+await host.page.screenshot({ path: path.join(out, '1_level_alice.png') });
+await guest.page.screenshot({ path: path.join(out, '1_level_bruno.png') });
+console.log('      level select reached at frame', await frameOf(), '(screenshots 1_level_*)');
 
 // Back is refused on that screen.
 await tap(host.page, 'Backspace', 10); await tap(host.page, 'KeyR', 10);
 await sleep(1500);
-await host.page.screenshot({ path: path.join(out, '2_retour_refuse.png') });
+await host.page.screenshot({ path: path.join(out, '2_back_refused.png') });
 
 // Alice picks the level, then each team is set up by its owner ("JOUEUR
 // SUIVANT" is preselected: one validation per team). While Bruno sets up his
@@ -104,21 +104,21 @@ for (let i = 0; i < 120; i++) {
       await tap(host.page, 'Space', 6); await sleep(1500);
       const y = await info(host.page);
       aliceIgnored = (y.team === x.team && y.holder === 1);
-      await host.page.screenshot({ path: path.join(out, '2b_reglage_bruno.png') });
+      await host.page.screenshot({ path: path.join(out, '2b_setup_bruno.png') });
     }
   }
   await tap(setup && x.holder === 1 ? guest.page : host.page, 'Space', 6);
   await sleep(700);
 }
-check(sawAliceSetup && sawBrunoSetup, `réglage des équipes : Alice puis Bruno ont eu la main sur leur propre équipe`);
-check(aliceIgnored === true, 'pendant que Bruno règle son équipe, la touche d’Alice ne fait rien');
+check(sawAliceSetup && sawBrunoSetup, `team setup: Alice, then Bruno, were in control of their own team`);
+check(aliceIgnored === true, 'while Bruno sets up his team, Alice’s key does nothing');
 
 // Battle
 let a;
 for (let i = 0; i < 400; i++) { a = await info(host.page); if ((a.team & 0xff) && !(a.team & 0x100)) break; await sleep(1000); }
-await host.page.screenshot({ path: path.join(out, '3_bataille_alice.png') });
-console.log(`      bataille : image ${a.frame}, « ${a.turn} »`);
-check(a.team > 0, `la bataille a commencé (équipe ${a.team} joue)`);
+await host.page.screenshot({ path: path.join(out, '3_battle_alice.png') });
+console.log(`      battle: frame ${a.frame}, "${a.turn}"`);
+check(a.team > 0, `the battle has started (team ${a.team} is playing)`);
 
 
 await host.page.evaluate(() => {
@@ -130,7 +130,7 @@ const t0 = Date.now(); let n = 0; let lastTurn = '';
 while (Date.now() - t0 < (+(process.env.MINUTES || 8)) * 60000) {
   const [x, y] = await Promise.all([info(host.page), info(guest.page)]);
   const pr = await probe(host.page);
-  if (x.turn !== lastTurn) { lastTurn = x.turn; console.log(`      tour : « ${x.turn} » image ${x.frame}`); }
+  if (x.turn !== lastTurn) { lastTurn = x.turn; console.log(`      turn: "${x.turn}" frame ${x.frame}`); }
   console.log(`      t=${((Date.now()-t0)/1000)|0}s A:${x.frame} B:${y.frame} hash ${y.hashOk} desync ${x.desyncs+y.desyncs} probe ${JSON.stringify(pr)}`);
   await host.page.screenshot({ path: path.join(out, `t_${String(n++).padStart(3, '0')}.png`) });
   await sleep(10000);

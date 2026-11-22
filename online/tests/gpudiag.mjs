@@ -29,7 +29,7 @@ await page.evaluateOnNewDocument(() => {
   try { new PerformanceObserver((l) => { for (const e of l.getEntries()) { window.__long += e.duration; window.__longN++; } }).observe({ entryTypes: ['longtask'] }); } catch {}
 });
 await page.goto(`http://127.0.0.1:${PORT}/?${(process.env.DIAG ?? '1') === '1' ? 'diag=1&' : ''}&q=${process.env.Q || 4}&gpu=${process.env.GPU ?? 1}`);
-await page.waitForFunction(() => /prêt/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+await page.waitForFunction(() => /ready/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.type('#name', 'Diag');
 await page.click('#btn-create');
 await page.waitForSelector('#room:not([hidden])');
@@ -47,7 +47,7 @@ if (process.env.PROFILE) {
 while (Date.now() - t0 < N * 1000) {
   await sleep(5000);
   const r = await page.evaluate(() => { const o = { long: Math.round(window.__long), n: window.__longN, frame: (window.__cdg?.state.lastStats || {}).frame || 0, pics: window.__cdg?.state.display?.frames || 0 }; window.__long = 0; window.__longN = 0; return o; });
-  console.log(`t=${Math.round((Date.now() - t0) / 1000)}s image ${r.frame} · images affichées ${r.pics} · tâches longues ${r.n} (${r.long} ms)`);
+  console.log(`t=${Math.round((Date.now() - t0) / 1000)}s frame ${r.frame} · pictures shown ${r.pics} · long tasks ${r.n} (${r.long} ms)`);
 }
 if (process.env.STACK) {
   // Where is each worker thread right now? (pause, print the stack, resume)
@@ -63,7 +63,7 @@ if (process.env.STACK) {
         console.log(`--- ${t.url().slice(-40)}`);
         for (const f of ev.callFrames.slice(0, 14)) console.log('   ', f.functionName || '(anon)');
         await s.send('Debugger.resume');
-      } else console.log(`--- ${t.url().slice(-40)} : pas de pause (bloqué hors JS ?)`);
+      } else console.log(`--- ${t.url().slice(-40)}: no pause (blocked outside JS?)`);
       await s.detach();
     } catch (e) { console.log('stack', e.message); }
   }
@@ -77,7 +77,7 @@ if (prof) {
     if (name === '(idle)' || name === '(program)') continue;
     const us = profile.timeDeltas[i] || 0; self.set(name, (self.get(name) || 0) + us); total += us;
   }
-  console.log(`fil principal : ${(total / 1e6).toFixed(1)} s de CPU`);
+  console.log(`main thread: ${(total / 1e6).toFixed(1)} s of CPU`);
   for (const [n, us] of [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25)) console.log(`${(100 * us / total).toFixed(1).padStart(5)} %  ${n}`);
 }
 if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });

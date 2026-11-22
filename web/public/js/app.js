@@ -6,7 +6,7 @@ import { Lockstep, HashBook } from './lockstep.js';
 import { Net } from './net.js';
 
 const $ = (s) => document.querySelector(s);
-const PLAYER_NAMES = ['Joueur 1', 'Joueur 2', 'Joueur 3', 'Joueur 4'];
+const PLAYER_NAMES = ['Player 1', 'Player 2', 'Player 3', 'Player 4'];
 
 // ------------------------------------------------------------ worker RPC
 class Emu {
@@ -88,18 +88,18 @@ function show(id, on) { $(id).hidden = !on; }
 // ------------------------------------------------------------ disc
 async function chooseDisc(fileList) {
   try {
-    status('Préparation du disque…');
-    const disc = await prepareDisc(fileList, (p) => status(`Décompression de l’archive… ${Math.round(p * 100)} %`));
-    status('Analyse du disque…');
+    status('Preparing the disc…');
+    const disc = await prepareDisc(fileList, (p) => status(`Decompressing the archive… ${Math.round(p * 100)} %`));
+    status('Analysing the disc…');
     S.disc = disc;
     S.fp = await fingerprint(disc);
     if ($('#remember-disc').checked) {
-      status('Mémorisation du disque dans le navigateur…');
+      status('Storing the disc in the browser…');
       try {
         await kvSet('disc', { entry: disc.entry, files: disc.files.map((f) => ({ name: f.name, file: f.file })) });
       } catch (e) {
         console.warn(e);
-        toast('Impossible de mémoriser le disque (quota du navigateur).');
+        toast('Could not store the disc (browser quota).');
       }
     }
     await boot();
@@ -117,7 +117,7 @@ async function restoreDisc() {
   $('#use-saved').onclick = async () => {
     try {
       S.disc = { entry: saved.entry, files: saved.files };
-      status('Analyse du disque…');
+      status('Analysing the disc…');
       S.fp = await fingerprint(S.disc);
       await boot();
     } catch (e) { status(e.message, 'error'); }
@@ -128,7 +128,7 @@ async function restoreDisc() {
 
 // ------------------------------------------------------------ boot
 async function boot() {
-  status('Démarrage de la PlayStation virtuelle…');
+  status('Starting the virtual PlayStation…');
   await initAudio();
   S.emu = new Emu();
   const r = await S.emu.call({
@@ -144,10 +144,10 @@ async function boot() {
   show('#game', true);
   show('#sidebar', true);
   if (!/^SLES02766|^SLES02767|^SLUS01195|^SLES02768/.test(S.serial)) {
-    toast(`Disque ${S.serial || 'inconnu'} : ce port vise Cochons de Guerre (SLES-02766).`, 6000);
+    toast(`Disc ${S.serial || 'unknown'}: this port targets Cochons de Guerre (SLES-02766).`, 6000);
   }
   if (S.serial === 'SLES02766' && !S.disc.files.some((f) => /\.sbi$/i.test(f.name))) {
-    console.info('Pas de fichier .sbi (LibCrypt) : facultatif, voir le README.');
+    console.info('No .sbi file (LibCrypt): optional, see the README.');
   }
   $('#disc-label').textContent = `${S.disc.entry} · ${S.serial}`;
   S.running = true;
@@ -159,8 +159,8 @@ async function boot() {
   const clock = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 5)'], { type: 'text/javascript' })));
   clock.onmessage = () => { if (document.hidden) { updateFps(performance.now()); pump(); } };
   setInterval(persistSram, 4000);
-  // Invitation link (#salon=CODE): join as soon as the disc is running.
-  const inv = location.hash.match(/salon=([A-Z]{4})/i);
+  // Invitation link (#room=CODE): join as soon as the disc is running.
+  const inv = location.hash.match(/(?:room|salon)=([A-Z]{4})/i);
   if (inv) joinRoom();
 }
 
@@ -213,7 +213,7 @@ async function initAudio() {
     S.audioNode.port.onmessage = (e) => { S.audioAvail = e.data; };
   } catch (e) {
     console.warn('audio', e);
-    toast('Audio indisponible dans ce navigateur.');
+    toast('Audio unavailable in this browser.');
   }
 }
 
@@ -339,7 +339,7 @@ async function runFrames(frames, hashFrame) {
     if (hashFrame != null) onLocalHash(hashFrame, r.hash);
   } catch (e) {
     console.error(e);
-    status('Erreur émulateur : ' + e.message, 'error');
+    status('Emulator error: ' + e.message, 'error');
   } finally {
     S.busy = false;
   }
@@ -351,7 +351,7 @@ function updateFps(now) {
     S.fpsShown = S.fpsCount * 1000 / (now - S.fpsT0);
     S.fpsCount = 0;
     S.fpsT0 = now;
-    $('#fps').textContent = `${S.fpsShown.toFixed(0)} img/s`;
+    $('#fps').textContent = `${S.fpsShown.toFixed(0)} fps`;
   }
 }
 
@@ -361,7 +361,7 @@ function setupNet() {
   S.net.addEventListener('room', (e) => onRoom(e.detail));
   S.net.addEventListener('servererror', (e) => toast(e.detail.message, 5000));
   S.net.addEventListener('close', () => {
-    if (S.mode === 'net') toast('Déconnecté du serveur.');
+    if (S.mode === 'net') toast('Disconnected from the server.');
     leaveNet(true);
   });
   S.net.addEventListener('msg', (e) => onNetMsg(e.detail));
@@ -371,7 +371,7 @@ function setupNet() {
 async function netConnect() {
   if (!S.net) setupNet();
   if (S.net.connected) return;
-  const name = $('#net-name').value.trim() || 'Cochon';
+  const name = $('#net-name').value.trim() || 'Hog';
   prefSet('name', name);
   await S.net.connect({ name, fp: S.fp, serial: S.serial });
 }
@@ -385,7 +385,7 @@ async function hostRoom() {
 
 async function joinRoom() {
   const code = $('#net-code').value.trim().toUpperCase();
-  if (!code) { toast('Entrez le code du salon.'); return; }
+  if (!code) { toast('Enter the room code.'); return; }
   try {
     await netConnect();
     S.net.send({ t: 'join', code });
@@ -407,7 +407,7 @@ function leaveNet(fromClose = false) {
   S.ls = null;
   S.acc = 0;
   renderRoom(null);
-  toast('Retour en partie solo (l’état actuel est conservé).');
+  toast('Back to a solo game (the current state is kept).');
 }
 
 let lastRoomSig = '';
@@ -419,8 +419,8 @@ function onRoom(room) {
   const sig = room.members.map((m) => `${m.id}:${m.port}`).join(',') + '|' + room.delay + '|' + room.host;
   const changed = sig !== lastRoomSig;
   lastRoomSig = sig;
-  if (S.net.isHost && (changed || !wasNet)) S.pendingSync = 'salon modifié';
-  if (!wasNet) toast(S.net.isHost ? `Salon ${room.code} créé. Donnez ce code à vos amis !` : `Salon ${room.code} rejoint.`);
+  if (S.net.isHost && (changed || !wasNet)) S.pendingSync = 'room changed';
+  if (!wasNet) toast(S.net.isHost ? `Room ${room.code} created. Give this code to your friends!` : `Joined room ${room.code}.`);
 }
 
 function onNetMsg(m) {
@@ -435,7 +435,7 @@ function onNetMsg(m) {
       }
       break;
     case 'needsync':
-      if (S.net.isHost) S.pendingSync = 'demande de ' + nameOf(m.p);
+      if (S.net.isHost) S.pendingSync = 'requested by ' + nameOf(m.p);
       break;
     case 'chat':
       addChat(m.p, m.text);
@@ -459,14 +459,14 @@ function onLocalHash(frame, hash) {
 function checkHashes(frame) {
   const bad = S.hashes.check(frame, S.net.id);
   if (bad.length) {
-    console.warn('désynchronisation', frame, bad);
-    toast('Désynchronisation détectée : resynchronisation…');
-    S.pendingSync = 'désynchronisation image ' + frame;
+    console.warn('desync', frame, bad);
+    toast('Desync detected: resyncing…');
+    S.pendingSync = 'desync at frame ' + frame;
   }
 }
 
 async function doHostSync() {
-  console.info('[netplay] synchronisation :', S.pendingSync);
+  console.info('[netplay] sync:', S.pendingSync);
   S.pendingSync = false;
   const room = S.net.room;
   if (!room || !S.net.isHost) return;
@@ -485,7 +485,7 @@ async function doHostSync() {
     S.netReady = true;
   } catch (e) {
     console.error(e);
-    toast('Échec de la synchronisation : ' + e.message);
+    toast('Sync failed: ' + e.message);
   } finally {
     S.busy = false;
   }
@@ -505,7 +505,7 @@ async function applySync(sync) {
     if (S.audioNode) S.audioNode.port.postMessage({ clear: true });
   } catch (e) {
     console.error(e);
-    toast('Synchronisation impossible : ' + e.message);
+    toast('Could not sync: ' + e.message);
   } finally {
     S.busy = false;
   }
@@ -519,11 +519,11 @@ function nameOf(id) {
 function updateNetStatus() {
   const el = $('#net-status');
   if (S.mode !== 'net') { el.textContent = ''; return; }
-  if (!S.ls.active) { el.textContent = S.net.isHost ? 'Synchronisation…' : 'En attente de l’hôte…'; return; }
+  if (!S.ls.active) { el.textContent = S.net.isHost ? 'Syncing…' : 'Waiting for the host…'; return; }
   const w = S.ls.waitingOn().filter((id) => id !== S.net.id);
   const h = S.ls.holder[0];
-  const ctl = h ? ` · Manette 1 : ${h === S.net.id ? 'vous' : nameOf(h)}` : '';
-  el.textContent = (w.length ? `En attente de ${w.map(nameOf).join(', ')}…` : `Synchronisé · image ${S.ls.frame}`) + ctl;
+  const ctl = h ? ` · Controller 1: ${h === S.net.id ? 'you' : nameOf(h)}` : '';
+  el.textContent = (w.length ? `Waiting for ${w.map(nameOf).join(', ')}…` : `In sync · frame ${S.ls.frame}`) + ctl;
 }
 
 function renderRoom(room) {
@@ -538,12 +538,12 @@ function renderRoom(room) {
     const li = document.createElement('li');
     const name = document.createElement('span');
     name.className = 'member-name';
-    name.textContent = m.name + (m.id === room.host ? ' (hôte)' : '') + (m.id === S.net.id ? ' — vous' : '');
+    name.textContent = m.name + (m.id === room.host ? ' (host)' : '') + (m.id === S.net.id ? ' — you' : '');
     li.appendChild(name);
     if (isHost) {
       const sel = document.createElement('select');
-      sel.setAttribute('aria-label', 'Manette de ' + m.name);
-      const opts = [[-1, 'Spectateur'], ...PLAYER_NAMES.map((n, i) => [i, `Manette ${i + 1}`])];
+      sel.setAttribute('aria-label', 'Controller for ' + m.name);
+      const opts = [[-1, 'Spectator'], ...PLAYER_NAMES.map((n, i) => [i, `Controller ${i + 1}`])];
       for (const [v, label] of opts) {
         const o = document.createElement('option');
         o.value = v; o.textContent = label; if (v === m.port) o.selected = true;
@@ -554,7 +554,7 @@ function renderRoom(room) {
     } else {
       const tag = document.createElement('span');
       tag.className = 'port-tag';
-      tag.textContent = m.port >= 0 ? `Manette ${m.port + 1}` : 'Spectateur';
+      tag.textContent = m.port >= 0 ? `Controller ${m.port + 1}` : 'Spectator';
       li.appendChild(tag);
     }
     list.appendChild(li);
@@ -563,14 +563,14 @@ function renderRoom(room) {
   $('#speed-row').hidden = !isHost;
   $('#net-speed').value = String(room.speed || 1);
   $('#net-delay').value = room.delay;
-  $('#net-delay-val').textContent = `${room.delay} img (${Math.round(room.delay * 1000 / (S.info?.fps || 50))} ms)`;
+  $('#net-delay-val').textContent = `${room.delay} frames (${Math.round(room.delay * 1000 / (S.info?.fps || 50))} ms)`;
 }
 
 function addChat(id, text) {
   const log = $('#chat-log');
   const p = document.createElement('p');
   const b = document.createElement('b');
-  b.textContent = nameOf(id) + ' : ';
+  b.textContent = nameOf(id) + ': ';
   p.appendChild(b);
   p.appendChild(document.createTextNode(String(text).slice(0, 300)));
   log.appendChild(p);
@@ -585,21 +585,21 @@ async function quickSave() {
   try {
     const r = await S.emu.call({ type: 'saveState' });
     await kvSet('state:' + S.serial, r.state);
-    toast('État sauvegardé.');
+    toast('State saved.');
   } finally { S.busy = false; }
 }
 
 async function quickLoad() {
   if (!S.emu) return;
-  if (S.mode === 'net' && !S.net.isHost) { toast('Seul l’hôte peut charger un état en réseau.'); return; }
+  if (S.mode === 'net' && !S.net.isHost) { toast('Only the host can load a state in a network game.'); return; }
   const st = await kvGet('state:' + S.serial);
-  if (!st) { toast('Aucun état sauvegardé.'); return; }
+  if (!st) { toast('No saved state.'); return; }
   while (S.busy) await new Promise((r) => setTimeout(r, 5));
   S.busy = true;
   try {
     await S.emu.call({ type: 'loadState', state: st });
-    toast('État restauré.');
-    if (S.mode === 'net') S.pendingSync = 'chargement d’un état';
+    toast('State restored.');
+    if (S.mode === 'net') S.pendingSync = 'state loaded';
   } finally { S.busy = false; }
 }
 
@@ -615,7 +615,7 @@ function renderKeys() {
     btn.className = 'key';
     btn.textContent = keyLabel(input.keys[action]);
     btn.onclick = () => {
-      btn.textContent = 'Appuyez sur une touche…';
+      btn.textContent = 'Press a key…';
       input.capture = (code) => { if (code !== 'Escape') input.setKey(action, code); renderKeys(); };
     };
     td2.appendChild(btn);
@@ -648,8 +648,8 @@ function wire() {
   $('#net-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
   $('#btn-leave').onclick = () => leaveNet();
   $('#btn-copy').onclick = () => {
-    const url = `${location.origin}${location.pathname}#salon=${S.net.room.code}`;
-    navigator.clipboard?.writeText(url).then(() => toast('Lien d’invitation copié.'), () => toast(url, 8000));
+    const url = `${location.origin}${location.pathname}#room=${S.net.room.code}`;
+    navigator.clipboard?.writeText(url).then(() => toast('Invite link copied.'), () => toast(url, 8000));
   };
   $('#net-delay').oninput = (e) => S.net.send({ t: 'setDelay', delay: +e.target.value });
   $('#net-speed').onchange = (e) => S.net.send({ t: 'setSpeed', speed: +e.target.value });
@@ -662,15 +662,15 @@ function wire() {
     $('#chat-input').value = '';
   };
 
-  $('#btn-pause').onclick = () => { S.paused = !S.paused; $('#btn-pause').textContent = S.paused ? 'Reprendre' : 'Pause'; };
+  $('#btn-pause').onclick = () => { S.paused = !S.paused; $('#btn-pause').textContent = S.paused ? 'Resume' : 'Pause'; };
   $('#btn-reset').onclick = async () => {
-    if (S.mode === 'net' && !S.net.isHost) { toast('Seul l’hôte peut redémarrer la partie.'); return; }
-    if (!confirm('Redémarrer la console ?')) return;
+    if (S.mode === 'net' && !S.net.isHost) { toast('Only the host can restart the game.'); return; }
+    if (!confirm('Restart the console?')) return;
     while (S.busy) await new Promise((r) => setTimeout(r, 5));
     S.busy = true;
     await S.emu.call({ type: 'reset' });
     S.busy = false;
-    if (S.mode === 'net') S.pendingSync = 'redémarrage';
+    if (S.mode === 'net') S.pendingSync = 'restart';
   };
   $('#btn-save').onclick = quickSave;
   $('#btn-load').onclick = quickLoad;
@@ -702,7 +702,7 @@ function wire() {
   addEventListener('pointerdown', resume);
   addEventListener('keydown', resume);
 
-  const m = location.hash.match(/salon=([A-Z]{4})/i);
+  const m = location.hash.match(/(?:room|salon)=([A-Z]{4})/i);
   if (m) {
     $('#net-code').value = m[1].toUpperCase();
     $('#invite-banner').hidden = false;

@@ -2,7 +2,7 @@
   "name": "cochons-de-guerre-online",
   "version": "0.1.0",
   "private": true,
-  "description": "Cochons de Guerre (version française recompilée) en WebAssembly dans le navigateur de chaque joueur, multijoueur en ligne en lockstep",
+  "description": "Cochons de Guerre (the French release, recompiled) running as WebAssembly in each player's browser, online multiplayer in lockstep",
   "type": "module",
   "scripts": {
     "start": "node server/index.mjs",

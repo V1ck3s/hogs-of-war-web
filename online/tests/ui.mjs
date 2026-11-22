@@ -40,88 +40,88 @@ const fits = (p) => p.evaluate(() => document.documentElement.scrollWidth <= inn
 
 // ---- home
 const a = await open(BASE);
-await a.waitForFunction(() => /prêt|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
-check(/prêt à jouer/.test(await text(a, '#preload')), `préchargement annoncé : « ${await text(a, '#preload')} »`);
-check(await a.$eval('#preload-bar', (e) => e.parentElement.classList.contains('done')), 'barre de préchargement pleine');
-check(!(await shown(a, '#invite')) && !(await shown(a, '#lobby-error')), 'accueil sans invitation ni erreur');
-await shot(a, '1_accueil.png');
+await a.waitForFunction(() => /ready|unavailable/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+check(/ready to play/.test(await text(a, '#preload')), `preload announced: "${await text(a, '#preload')}"`);
+check(await a.$eval('#preload-bar', (e) => e.parentElement.classList.contains('done')), 'preload bar full');
+check(!(await shown(a, '#invite')) && !(await shown(a, '#lobby-error')), 'home page with no invitation and no error');
+await shot(a, '1_home.png');
 
 // A wrong code is answered on the page itself.
 await a.type('#name', 'Alice');
 await a.type('#code', 'zz');
 await a.click('#btn-join');
-check(/4 lettres/.test(await text(a, '#lobby-error')), `code trop court : « ${await text(a, '#lobby-error')} »`);
+check(/4 letters/.test(await text(a, '#lobby-error')), `code too short: "${await text(a, '#lobby-error')}"`);
 await a.type('#code', 'q9z');
-check((await a.$eval('#code', (e) => e.value)) === 'ZZQZ', 'le code ne garde que 4 lettres, en capitales');
+check((await a.$eval('#code', (e) => e.value)) === 'ZZQZ', 'the code keeps only 4 letters, in capitals');
 await a.click('#btn-join');
-await a.waitForFunction(() => /introuvable/.test(document.querySelector('#lobby-error').textContent), { timeout: 10000 });
-check(await shown(a, '#lobby-error'), `salon inconnu : « ${await text(a, '#lobby-error')} »`);
-await shot(a, '2_accueil_erreur.png');
+await a.waitForFunction(() => /not found/.test(document.querySelector('#lobby-error').textContent), { timeout: 10000 });
+check(await shown(a, '#lobby-error'), `unknown room: "${await text(a, '#lobby-error')}"`);
+await shot(a, '2_home_error.png');
 
 // ---- room
 await a.click('#btn-create');
 await a.waitForSelector('#room:not([hidden])');
 const code = await text(a, '#room-code2');
-check(/^[A-Z]{4}$/.test(code), `salon créé : ${code}`);
-check(await shown(a, '#btn-start') && !(await a.$eval('#btn-start', (e) => e.disabled)), 'l’hôte peut lancer la partie');
-check(/Alice/.test(await text(a, '#seats li.me')) && /hôte/.test(await text(a, '#seats li.me')), 'Alice est à la place 1, marquée hôte');
-check(/×/.test(await text(a, '#picture-hint')), `image annoncée : « ${await text(a, '#picture-hint')} »`);
+check(/^[A-Z]{4}$/.test(code), `room created: ${code}`);
+check(await shown(a, '#btn-start') && !(await a.$eval('#btn-start', (e) => e.disabled)), 'the host can start the game');
+check(/Alice/.test(await text(a, '#seats li.me')) && /host/.test(await text(a, '#seats li.me')), 'Alice is in seat 1, marked host');
+check(/×/.test(await text(a, '#picture-hint')), `picture announced: "${await text(a, '#picture-hint')}"`);
 await a.select('#aspect', '32:9'); await a.select('#quality', '4');
-check(/3413 × 960/.test(await text(a, '#picture-hint')), `32:9 en 4× : « ${await text(a, '#picture-hint')} »`);
-await shot(a, '3_salon_hote.png');
+check(/3413 × 960/.test(await text(a, '#picture-hint')), `32:9 at 4×: "${await text(a, '#picture-hint')}"`);
+await shot(a, '3_room_host.png');
 
 // The room is listed on the home page of someone else.
 const c = await open(BASE);
 await c.waitForFunction((k) => document.querySelector('#room-list').textContent.includes(k), { timeout: 10000 }, code);
-check(true, `le salon ${code} apparaît dans la liste des salons ouverts`);
+check(true, `room ${code} appears in the list of open rooms`);
 await c.close();
 
 // ---- invitation link
-const g = await open(`${BASE}?salon=${code}`);
-check(await shown(g, '#invite') && (await text(g, '#invite-code')) === code, 'le lien d’invitation annonce le salon');
-await shot(g, '4_accueil_invite.png');
+const g = await open(`${BASE}?room=${code}`);
+check(await shown(g, '#invite') && (await text(g, '#invite-code')) === code, 'the invitation link announces the room');
+await shot(g, '4_home_invited.png');
 await g.type('#name', 'Bruno');
 await g.keyboard.press('Enter');   // Enter in the name field joins
 await g.waitForSelector('#room:not([hidden])');
 await g.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2);
-check(/Bruno/.test(await text(g, '#seats li.me')), 'Bruno a pris la place 2 avec la touche Entrée');
-check(!(await shown(g, '#btn-start')) && /Alice/.test(await text(g, '#room-wait')), `l’invité attend l’hôte : « ${await text(g, '#room-wait')} »`);
+check(/Bruno/.test(await text(g, '#seats li.me')), 'Bruno took seat 2 with the Enter key');
+check(!(await shown(g, '#btn-start')) && /Alice/.test(await text(g, '#room-wait')), `the guest waits for the host: "${await text(g, '#room-wait')}"`);
 
 // Watching only, then taking a seat again.
 await g.click('#seats li.me button');
 await g.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 1);
-check(/Bruno \(vous\)/.test(await text(g, '#spectators')), `Bruno regarde : « ${await text(g, '#spectators')} »`);
+check(/Bruno \(you\)/.test(await text(g, '#spectators')), `Bruno watches: "${await text(g, '#spectators')}"`);
 await g.click('#seats li:nth-child(3) button');
 await g.waitForFunction(() => /Bruno/.test(document.querySelector('#seats li:nth-child(3)').textContent));
-check(true, 'Bruno a pris la place 3');
+check(true, 'Bruno took seat 3');
 
 // Discussion in the lobby.
-await g.type('#room-chat-input', 'Salut !');
+await g.type('#room-chat-input', 'Hi!');
 await g.keyboard.press('Enter');
-await a.waitForFunction(() => /Bruno : Salut !/.test(document.querySelector('#room-chat-log').textContent), { timeout: 5000 });
-check(true, 'le message de Bruno arrive chez Alice dans le salon');
+await a.waitForFunction(() => /Bruno: Hi!/.test(document.querySelector('#room-chat-log').textContent), { timeout: 5000 });
+check(true, 'Bruno’s message reaches Alice in the room');
 await a.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2);
 await sleep(2500);   // readiness is announced every 2 s at most
-await shot(a, '5_salon_deux_joueurs.png');
-await shot(g, '6_salon_invite.png');
+await shot(a, '5_room_two_players.png');
+await shot(g, '6_room_guest.png');
 
 // Narrow and very wide windows.
 await g.setViewport({ width: 390, height: 844 });
 await sleep(300);
-check(await fits(g), 'salon sans défilement horizontal sur un écran de téléphone');
-await shot(g, '7_salon_etroit.png');
+check(await fits(g), 'room page without horizontal scrolling on a phone screen');
+await shot(g, '7_room_narrow.png');
 await a.setViewport({ width: 2560, height: 720 });
 await sleep(300);
-await shot(a, '8_salon_32_9.png');
+await shot(a, '8_room_32_9.png');
 
 // Leaving goes back to the home page; the host's room stays.
 await g.click('#btn-leave2');
 await g.waitForSelector('#lobby:not([hidden])');
-check(await fits(g), 'accueil sans défilement horizontal sur un écran de téléphone');
-await shot(g, '9_accueil_etroit.png');
+check(await fits(g), 'home page without horizontal scrolling on a phone screen');
+await shot(g, '9_home_narrow.png');
 await a.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 1);
-check(true, 'la place de Bruno est libérée chez Alice');
+check(true, 'Bruno’s seat is freed on Alice’s side');
 
 await b.close(); srv.kill();
-console.log(failures ? `${failures} échec(s)` : 'Accueil et salon : tous les contrôles sont passés.');
+console.log(failures ? `${failures} failure(s)` : 'Home page and room: all checks passed.');
 process.exit(failures ? 1 : 0);

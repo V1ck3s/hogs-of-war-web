@@ -13,7 +13,7 @@ const SECONDS = +(process.argv[3] || 60);
 fs.mkdirSync(out, { recursive: true });
 const PORT = 18300 + Math.floor(Math.random() * 90);
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], { env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit'] });
-srv.stdout.on('data', (d) => process.stdout.write('[serveur] ' + d));
+srv.stdout.on('data', (d) => process.stdout.write('[server] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const browser = await puppeteer.launch({
   executablePath: process.env.CHROME || '/usr/bin/chromium', headless: true, protocolTimeout: 600000,
@@ -26,9 +26,9 @@ const logs = [];
 page.on('console', (m) => { logs.push(m.text()); if (logs.length < 400) console.log('[page]', m.text()); });
 page.on('pageerror', (e) => console.log('[page error]', e.message));
 await page.goto(`http://127.0.0.1:${PORT}/?diag=1`);
-await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 120000 });
-console.log('préchargement :', await page.$eval('#preload', (e) => e.textContent));
-await page.type('#name', 'Testeur');
+await page.waitForFunction(() => /ready|disc|unavailable/.test(document.querySelector('#preload').textContent), { timeout: 120000 });
+console.log('preload:', await page.$eval('#preload', (e) => e.textContent));
+await page.type('#name', 'Tester');
 await page.click('#btn-create');
 await page.waitForSelector('#room:not([hidden])');
 await page.click('#btn-start');

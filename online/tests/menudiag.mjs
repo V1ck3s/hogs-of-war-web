@@ -14,7 +14,7 @@ const b = await puppeteer.launch({ executablePath: process.env.CHROME || '/usr/b
 const page = await b.newPage();
 await page.setViewport({ width: 900, height: 560 });
 await page.goto(`http://127.0.0.1:${PORT}/?q=1`);
-await page.waitForFunction(() => /prêt/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+await page.waitForFunction(() => /ready/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.click('#btn-create');
 await page.waitForSelector('#room:not([hidden])');
 if (process.env.MODE) await page.select('#mode', process.env.MODE);

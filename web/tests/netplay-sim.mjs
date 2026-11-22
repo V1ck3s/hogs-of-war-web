@@ -67,9 +67,9 @@ let compared = 0, bad = 0;
 for (const [f, h] of hashes.a) {
   if (!hashes.b.has(f)) continue;
   compared++;
-  if (hashes.b.get(f) !== h) { bad++; console.error(`DESYNC à l'image ${f}`); }
+  if (hashes.b.get(f) !== h) { bad++; console.error(`DESYNC at frame ${f}`); }
 }
-console.log(`${N} images x2 en ${((Date.now() - t0) / 1000).toFixed(0)} s, ${compared} empreintes comparées, ` +
-  `${holderChanges} changements de détenteur de la manette, blocages a=${ls.a.stats.stalls} b=${ls.b.stats.stalls}`);
-if (bad || !compared) { console.error('ÉCHEC'); process.exit(1); }
-console.log('OK : les deux consoles sont restées identiques.');
+console.log(`${N} frames x2 in ${((Date.now() - t0) / 1000).toFixed(0)} s, ${compared} hashes compared, ` +
+  `${holderChanges} controller holder changes, stalls a=${ls.a.stats.stalls} b=${ls.b.stats.stalls}`);
+if (bad || !compared) { console.error('FAILED'); process.exit(1); }
+console.log('OK: both consoles stayed identical.');

@@ -5,8 +5,8 @@ export const BIT = {
 };
 
 export const ACTIONS = [
-  ['up', 'Haut'], ['down', 'Bas'], ['left', 'Gauche'], ['right', 'Droite'],
-  ['cross', 'Croix ✕ (valider / tirer)'], ['circle', 'Rond ○ (retour)'], ['square', 'Carré □'], ['triangle', 'Triangle △'],
+  ['up', 'Up'], ['down', 'Down'], ['left', 'Left'], ['right', 'Right'],
+  ['cross', 'Cross ✕ (confirm / fire)'], ['circle', 'Circle ○ (back)'], ['square', 'Square □'], ['triangle', 'Triangle △'],
   ['l1', 'L1'], ['r1', 'R1'], ['l2', 'L2'], ['r2', 'R2'],
   ['start', 'Start'], ['select', 'Select'],
 ];
@@ -76,8 +76,8 @@ export class Input {
 export function keyLabel(code) {
   if (!code) return '—';
   const named = {
-    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Entrée', Space: 'Espace',
-    Backspace: 'Retour arr.', ShiftLeft: 'Maj g.', ShiftRight: 'Maj d.', ControlLeft: 'Ctrl g.', ControlRight: 'Ctrl d.', Tab: 'Tab',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Enter', Space: 'Space',
+    Backspace: 'Backspace', ShiftLeft: 'L Shift', ShiftRight: 'R Shift', ControlLeft: 'L Ctrl', ControlRight: 'R Ctrl', Tab: 'Tab',
   };
   if (named[code]) return named[code];
   if (code.startsWith('Key')) return code.slice(3);

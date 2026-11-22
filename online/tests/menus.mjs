@@ -19,7 +19,7 @@ const out = path.resolve(process.argv[2] || 'join-out');
 fs.mkdirSync(out, { recursive: true });
 const PORT = 18300 + Math.floor(Math.random() * 90);
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], { env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit'] });
-srv.stdout.on('data', (d) => process.stdout.write('[serveur] ' + d));
+srv.stdout.on('data', (d) => process.stdout.write('[server] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -35,9 +35,9 @@ async function browser(name, q, aspect) {
   await page.setViewport({ width: 1100, height: 620 });
   page.on('console', (m) => { const t = m.text(); if (!/lockstep frame|GL Driver Message/.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.SKIP === "1" ? "&rasterskip=1" : ""}${process.env.MEMO === "0" ? "&memo=0" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${process.env.SKIP === "1" ? "&rasterskip=1" : ""}${process.env.MEMO === "0" ? "&memo=0" : ""}${roomCode ? '&room=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
-  await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+  await page.waitForFunction(() => /ready|disc|unavailable/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
   return { b, page, name };
 }
@@ -69,10 +69,10 @@ for (let i = 0; i < 200; i++) {
   if ((a.team & 0xff) && !(a.team & 0x100) && a.frame > 2500) break;
   await tap(host.page, 'Space', 6); await sleep(600);
 }
-console.log(`      bataille : image ${a.frame}, « ${a.turn} »`);
+console.log(`      battle: frame ${a.frame}, "${a.turn}"`);
 const bufs = await host.page.evaluate(() => [0x80033AC4, 0x80037B38, 0x80029194].map((x) => window.__cdg.peek(x).toString(16)));
-console.log(`      tampons de dessin : ${bufs[0]}, ${bufs[1]} (taille ${bufs[2]})`);
-await host.page.screenshot({ path: path.join(out, 'bataille.png') });
+console.log(`      drawing buffers: ${bufs[0]}, ${bufs[1]} (size ${bufs[2]})`);
+await host.page.screenshot({ path: path.join(out, 'battle.png') });
 
 
 const shot = (n) => host.page.screenshot({ path: path.join(out, n + '.png') });
@@ -80,10 +80,10 @@ async function hold(k, frames) { const f0 = await frameOf(); await host.page.key
 await untilFrame((await frameOf()) + 100);
 await shot('m0');
 await hold('Escape', 8); await untilFrame((await frameOf()) + 60); await shot('m1_pause');
-await hold('Escape', 8); await untilFrame((await frameOf()) + 60); await shot('m2_apres_pause');
-await hold('Backspace', 20); await untilFrame((await frameOf()) + 40); await shot('m3_armes');
+await hold('Escape', 8); await untilFrame((await frameOf()) + 60); await shot('m2_after_pause');
+await hold('Backspace', 20); await untilFrame((await frameOf()) + 40); await shot('m3_weapons');
 await hold('KeyR', 8); await untilFrame((await frameOf()) + 60); await shot('m4');
 await hold('Tab', 8); await untilFrame((await frameOf()) + 60); await shot('m5_select');
 await hold('Tab', 8); await untilFrame((await frameOf()) + 60); await shot('m6');
-console.log('fin', await frameOf());
+console.log('end', await frameOf());
 await host.b.close(); srv.kill(); process.exit(0);

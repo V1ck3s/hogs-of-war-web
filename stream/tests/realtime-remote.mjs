@@ -37,7 +37,7 @@ if (AUX) {
   try { for (const pid of execFileSync('pgrep', ['-x', 'pulseaudio']).toString().trim().split('\n')) execFileSync('taskset', ['-apc', AUX, pid]); } catch { /* best effort */ }
 }
 let log = '';
-srv.stdout.on('data', (d) => { log += d; if (!/ffmpeg/.test(d)) process.stdout.write('[serveur] ' + d); });
+srv.stdout.on('data', (d) => { log += d; if (!/ffmpeg/.test(d)) process.stdout.write('[server] ' + d); });
 await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -88,16 +88,16 @@ function client(name, onBinary) {
   });
 }
 
-const host = await client('Hôte');
+const host = await client('Host');
 host.send({ t: 'create', quality: process.env.RT_QUALITY || '360p', aspect: +(process.env.RT_ASPECT || 16 / 9) });
 for (let i = 0; i < 600 && !(host.room && host.room.state === 'running'); i++) await sleep(250);
-check(host.room && host.room.state === 'running', 'jeu lancé sur le serveur (build de production)');
-check(/entrées : XTest/.test(log), 'entrées clavier par XTest (aucun port de debug)');
+check(host.room && host.room.state === 'running', 'game started on the server (production build)');
+check(/inputs: XTest/.test(log), 'keyboard inputs through XTest (no debug port)');
 
-const h264 = fs.openSync(path.join(out, 'invite.h264'), 'w');
-const ogg = new OggWriter(path.join(out, 'invite.ogg')); ogg.start();
+const h264 = fs.openSync(path.join(out, 'guest.h264'), 'w');
+const ogg = new OggWriter(path.join(out, 'guest.ogg')); ogg.start();
 let vFrames = 0, aPackets = 0, keyframes = 0;
-const guest = await client('Invité', (buf) => {
+const guest = await client('Guest', (buf) => {
   if (buf[0] === 1) { vFrames++; if (buf[1]) keyframes++; fs.writeSync(h264, buf.subarray(10)); }
   else if (buf[0] === 2) { aPackets++; ogg.packet(buf.subarray(9)); }
 });
@@ -132,30 +132,30 @@ const hzAll = [...glog.matchAll(/runtime cadence: guest=([0-9.]+) Hz/g)].map((m)
 const hz = hzAll.slice(2, 2 + Math.floor(SECONDS / 5) + 1);           // intro / title / demo window
 const hzBattle = hzAll.slice(-Math.floor(battleSecs / 5));             // multiplayer battle window
 const avg = hz.reduce((a, b) => a + b, 0) / hz.length;
-console.log(`      cadence du jeu (Hz, toutes les 5 s) : ${hz.map((x) => x.toFixed(1)).join(' ')}`);
-check(hz.length > 5 && avg >= 49.5 && Math.min(...hz) >= 48, `temps réel (intro, titre, démo) : moyenne ${avg.toFixed(2)} Hz, minimum ${Math.min(...hz).toFixed(1)} Hz (50 Hz PAL)`);
+console.log(`      game cadence (Hz, every 5 s): ${hz.map((x) => x.toFixed(1)).join(' ')}`);
+check(hz.length > 5 && avg >= 49.5 && Math.min(...hz) >= 48, `real time (intro, title, demo): average ${avg.toFixed(2)} Hz, minimum ${Math.min(...hz).toFixed(1)} Hz (50 Hz PAL)`);
 const avgB = hzBattle.reduce((a, b) => a + b, 0) / hzBattle.length;
-console.log(`      cadence en bataille multijoueur : ${hzBattle.map((x) => x.toFixed(1)).join(' ')}`);
-check(hzBattle.length >= 6 && avgB >= 49.5 && Math.min(...hzBattle) >= 48, `temps réel en bataille multijoueur : moyenne ${avgB.toFixed(2)} Hz, minimum ${Math.min(...hzBattle).toFixed(1)} Hz`);
+console.log(`      multiplayer battle cadence: ${hzBattle.map((x) => x.toFixed(1)).join(' ')}`);
+check(hzBattle.length >= 6 && avgB >= 49.5 && Math.min(...hzBattle) >= 48, `real time in a multiplayer battle: average ${avgB.toFixed(2)} Hz, minimum ${Math.min(...hzBattle).toFixed(1)} Hz`);
 const holderGuest = host.msgs.some((m) => m.t === 'room' && m.holder && m.holder === guest.id);
-check(holderGuest, 'le joueur distant a pris la manette partagée pendant la bataille');
-check(vf / wall >= 49, `vidéo reçue : ${(vf / wall).toFixed(1)} img/s (${keyframes} images clés)`);
-check(ap * 0.02 >= wall * 0.98, `son reçu : ${(ap * 0.02).toFixed(1)} s de son pour ${wall.toFixed(1)} s écoulées`);
+check(holderGuest, 'the remote player took the shared controller during the battle');
+check(vf / wall >= 49, `video received: ${(vf / wall).toFixed(1)} fps (${keyframes} keyframes)`);
+check(ap * 0.02 >= wall * 0.98, `sound received: ${(ap * 0.02).toFixed(1)} s of sound for ${wall.toFixed(1)} s elapsed`);
 
 // Offline analysis of what the guest received.
-execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', path.join(out, 'invite.ogg'), '-ar', '16000', '-ac', '1', path.join(out, 'invite16.wav')]);
-const pcm = fs.readFileSync(path.join(out, 'invite16.wav')).subarray(44);
+execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', path.join(out, 'guest.ogg'), '-ar', '16000', '-ac', '1', path.join(out, 'guest16.wav')]);
+const pcm = fs.readFileSync(path.join(out, 'guest16.wav')).subarray(44);
 let silent = 0, windows = 0;
 for (let o = 0; o + 3200 <= pcm.length; o += 3200) {          // 100 ms windows
   let e = 0; for (let i = o; i < o + 3200; i += 2) { const v = pcm.readInt16LE(i); e += v * v; }
   windows++; if (Math.sqrt(e / 1600) < 30) silent++;
 }
-console.log(`      son décodé : ${(pcm.length / 32000).toFixed(1)} s, ${(100 * silent / windows).toFixed(1)} % de fenêtres de 100 ms silencieuses`);
-const frames = execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames,width,height', '-of', 'csv=p=0', path.join(out, 'invite.h264')]).toString().trim();
-console.log(`      vidéo décodée (largeur,hauteur,images) : ${frames}`);
+console.log(`      decoded sound: ${(pcm.length / 32000).toFixed(1)} s, ${(100 * silent / windows).toFixed(1)} % of 100 ms windows silent`);
+const frames = execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames,width,height', '-of', 'csv=p=0', path.join(out, 'guest.h264')]).toString().trim();
+console.log(`      decoded video (width,height,frames): ${frames}`);
 const total = +frames.split(',')[2] / 50;
 for (const t of [40, Math.floor(SECONDS) + 25, Math.floor(total) - 30, Math.floor(total) - 3]) {
-  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-r', '50', '-i', path.join(out, 'invite.h264'), '-vf', `select=eq(n\\,${t * 50})`, '-frames:v', '1', path.join(out, `invite_${t}s.png`)]);
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-r', '50', '-i', path.join(out, 'guest.h264'), '-vf', `select=eq(n\\,${t * 50})`, '-frames:v', '1', path.join(out, `guest_${t}s.png`)]);
 }
-console.log(failures ? `${failures} échec(s)` : 'Tous les contrôles temps réel sont passés.');
+console.log(failures ? `${failures} failure(s)` : 'All real-time checks passed.');
 process.exit(failures ? 1 : 0);

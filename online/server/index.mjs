@@ -1,4 +1,4 @@
-// Cochons de Guerre en ligne — the server provides the game, every player runs it.
+// Cochons de Guerre online — the server provides the game, every player runs it.
 //
 // The recompiled game (WebAssembly) runs in each player's browser. This server
 //   * serves the page and the game (wasm + small runtime files), and streams
@@ -151,7 +151,7 @@ const DISC_SEEN = process.env.CDG_DISC_STATS === '1' ? new Map() : null;
 function discStats() {
   const per = {};
   for (const k of DISC_SEEN.keys()) { const t = k.split('/')[0]; per[t] = (per[t] || 0) + 1; }
-  console.log(`disque lu : ${DISC_SEEN.size} morceaux (${(DISC_SEEN.size * (disc?.chunk || 0) / 1048576).toFixed(1)} Mo), par piste ${JSON.stringify(per)}`);
+  console.log(`disc read: ${DISC_SEEN.size} chunks (${(DISC_SEEN.size * (disc?.chunk || 0) / 1048576).toFixed(1)} MB), per track ${JSON.stringify(per)}`);
   if (process.env.CDG_DISC_STATS_OUT) fs.writeFileSync(process.env.CDG_DISC_STATS_OUT, JSON.stringify([...DISC_SEEN.keys()]));
 }
 function serveDisc(req, res, m) {
@@ -370,7 +370,7 @@ function leaveRoom(c) {
     broadcast(r, { t: 'drop', id: c.id, after });
     record(r, { t: 'drop', i: r.session.players.indexOf(c.id), after });
   }
-  if (!r.members.length) { rooms.delete(r.code); log(`salon ${r.code} fermé`); return; }
+  if (!r.members.length) { rooms.delete(r.code); log(`room ${r.code} closed`); return; }
   if (r.host === c.id) r.host = r.members[0];
   broadcastRoom(r);
 }
@@ -386,7 +386,7 @@ function requestSnapshot(r) {
   if (!from) return;
   r.snapFrom = from;
   send(clients.get(from), { t: 'snapreq' });
-  log(`salon ${r.code} : instantané demandé à ${clients.get(from).name}`);
+  log(`room ${r.code}: snapshot requested from ${clients.get(from).name}`);
 }
 
 function onSnapshotBytes(c, data) {
@@ -423,7 +423,7 @@ function onSnapshotBytes(c, data) {
     const o = clients.get(id);
     if (o && o.ws.readyState === 1) { o.ws.send(meta); o.ws.send(data, { binary: true }); }
   }
-  log(`salon ${r.code} : ${joined.join(', ')} rejoint la partie (instantané de l’image ${f}, ${data.length} octets)`);
+  log(`room ${r.code}: ${joined.join(', ')} joined the game (snapshot of frame ${f}, ${data.length} bytes)`);
   broadcastRoom(r);
 }
 
@@ -431,7 +431,7 @@ function onJson(c, m) {
   const r = c.room ? rooms.get(c.room) : null;
   switch (m.t) {
     case 'hello':
-      c.name = String(m.name || 'Cochon').slice(0, 24);
+      c.name = String(m.name || 'Hog').slice(0, 24);
       send(c, { t: 'welcome', id: c.id, key: c.key, version: manifest?.version, maxPlayers: MAX_PLAYERS });
       return;
     case 'create': {
@@ -440,15 +440,15 @@ function onJson(c, m) {
       const nr = { code, host: c.id, members: [c.id], seats: new Map([[c.id, 0]]), state: 'lobby', delay: 2, session: null, mode: 'multi', cpus: 1 };
       rooms.set(code, nr);
       c.room = code;
-      log(`salon ${code} créé par ${c.name}`);
+      log(`room ${code} created by ${c.name}`);
       broadcastRoom(nr);
       return;
     }
     case 'join': {
       const code = String(m.code || '').toUpperCase().trim();
       const nr = rooms.get(code);
-      if (!nr) { send(c, { t: 'error', message: `Salon ${code} introuvable.` }); return; }
-      if (nr.members.length >= MAX_ROOM) { send(c, { t: 'error', message: 'Salon complet.' }); return; }
+      if (!nr) { send(c, { t: 'error', message: `Room ${code} not found.` }); return; }
+      if (nr.members.length >= MAX_ROOM) { send(c, { t: 'error', message: 'Room is full.' }); return; }
       if (r) leaveRoom(c);
       nr.members.push(c.id);
       c.room = code;
@@ -516,7 +516,7 @@ function onJson(c, m) {
         inGame: new Set(r.members),
       };
       r.state = 'running';
-      log(`salon ${r.code} : partie lancée, ${players.length} joueur(s)`);
+      log(`room ${r.code}: game started, ${players.length} player(s)`);
       broadcastRoom(r);
       broadcast(r, { t: 'go', session: r.session.id, players, host: r.host, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, mode: r.mode, cpus: r.cpus | 0 });
       record(r, { t: 'go', version: manifest?.version, players: players.length, hostIndex: Math.max(0, players.indexOf(r.host)), delay: r.delay, mode: r.mode, cpus: r.cpus | 0 });
@@ -554,7 +554,7 @@ function onJson(c, m) {
       // A player's page reports a crash or a stall (what it saw, for the log).
       let d = '';
       try { d = JSON.stringify(m.d); } catch { d = String(m.d); }
-      log(`diagnostic ${r ? `salon ${r.code}` : 'hors salon'}, ${c.name} : ${String(m.kind || '?').slice(0, 20)} ${d.slice(0, 20000)}`);
+      log(`diagnostic ${r ? `room ${r.code}` : 'no room'}, ${c.name}: ${String(m.kind || '?').slice(0, 20)} ${d.slice(0, 20000)}`);
       return;
     }
     case 'chat':
@@ -595,7 +595,7 @@ export function start({ port = PORT, host = HOST } = {}) {
     : http.createServer(handler);
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 32 << 20 });
   wss.on('connection', (ws) => {
-    const c = { id: newId(), ws, name: 'Cochon', room: null, alive: true, rtt: 0, key: crypto.randomBytes(12).toString('hex') };
+    const c = { id: newId(), ws, name: 'Hog', room: null, alive: true, rtt: 0, key: crypto.randomBytes(12).toString('hex') };
     clients.set(c.id, c);
     let owner = null;   // set when this socket is another client's lane
     ws.on('pong', () => { c.alive = true; });
@@ -636,8 +636,8 @@ export function start({ port = PORT, host = HOST } = {}) {
   }, 15000);
   ka.unref();
   server.listen(port, host, () => {
-    log(`Cochons de Guerre en ligne : ${tls ? 'https' : 'http'}://localhost:${port}/` +
-      (manifest ? ` (jeu ${manifest.version})` : ' — jeu absent : lancez « node tools/prepare.mjs »'));
+    log(`Cochons de Guerre online: ${tls ? 'https' : 'http'}://localhost:${port}/` +
+      (manifest ? ` (game ${manifest.version})` : ' — game missing: run "node tools/prepare.mjs"'));
   });
   return { server, wss, rooms, clients, stats, reload() { manifest = readJson(path.join(GAME, 'files.json')); disc = readJson(path.join(GAME, 'disc.json')); } };
 }

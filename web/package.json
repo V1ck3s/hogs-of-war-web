@@ -2,7 +2,7 @@
   "name": "cochons-de-guerre-web",
   "version": "0.1.0",
   "private": true,
-  "description": "Cochons de Guerre (Hogs of War, PS1) dans le navigateur, avec multijoueur en ligne",
+  "description": "Cochons de Guerre (Hogs of War, PS1) in the browser, with online multiplayer",
   "type": "module",
   "license": "SEE LICENSE IN ../LICENSE",
   "scripts": {

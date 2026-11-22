@@ -137,16 +137,16 @@ function watchdog(now) {
   views();
   const f = Atomics.load(mem.u32, mem.status >> 2);
   if (f !== lastFrame) {
-    if (stallSent) sendDiag('reprise', { stalledMs: Math.round(now - lastFrameAt) });
+    if (stallSent) sendDiag('resumed', { stalledMs: Math.round(now - lastFrameAt) });
     lastFrame = f; lastFrameAt = now; stallSent = false;
   } else if (!stallSent && lastFrameAt && now - lastFrameAt > 5000) {
     stallSent = true;
-    sendDiag('gel', { stalledMs: Math.round(now - lastFrameAt) });
+    sendDiag('stall', { stalledMs: Math.round(now - lastFrameAt) });
   }
   if (pageBeat && now - pageBeat > 5000) {
-    if (!pageSent) { pageSent = true; sendDiag('page-bloquee', {}); }
+    if (!pageSent) { pageSent = true; sendDiag('page-stalled', {}); }
   } else if (pageSent && pageBeat && now - pageBeat < 2000) {
-    pageSent = false; sendDiag('page-reprise', {});
+    pageSent = false; sendDiag('page-resumed', {});
   }
 }
 

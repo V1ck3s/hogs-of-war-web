@@ -20,7 +20,7 @@ export class Net extends EventTarget {
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
       ws.onopen = () => this.send({ t: 'hello', name, fp, serial });
-      ws.onerror = () => reject(new Error('Connexion au serveur impossible.'));
+      ws.onerror = () => reject(new Error('Could not connect to the server.'));
       ws.onclose = () => { this.room = null; this.emit('close'); };
       ws.onmessage = (ev) => {
         if (typeof ev.data !== 'string') { this.onBinary(ev.data); return; }

@@ -17,7 +17,7 @@ for (const at of [150, 230, 270, 330, 420, 520, 700, 900]) {
     a.runFrame(); b.runFrame(); f++;
     if (diverged < 0 && i % 10 === 9 && a.ramHash() !== b.ramHash()) diverged = i;
   }
-  console.log(`sync à l'image ${at}: ${diverged < 0 ? 'identique' : 'DIVERGE après ' + diverged + ' images'}`);
+  console.log(`sync at frame ${at}: ${diverged < 0 ? 'identical' : 'DIVERGES after ' + diverged + ' frames'}`);
   if (diverged >= 0) bad++;
 }
 process.exit(bad ? 1 : 0);

@@ -2,7 +2,7 @@
   "name": "cochons-de-guerre-stream",
   "version": "0.1.0",
   "private": true,
-  "description": "Cochons de Guerre (version française recompilée) joué en streaming depuis le serveur, multijoueur à distance",
+  "description": "Cochons de Guerre (recompiled French version) streamed from the server, with remote multiplayer",
   "type": "module",
   "scripts": {
     "start": "node server/index.mjs",

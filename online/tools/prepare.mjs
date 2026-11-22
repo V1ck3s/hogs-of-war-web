@@ -109,7 +109,7 @@ for (const name of discFiles) {
     add(`disc/${name}`, fs.readFileSync(p));
   }
 }
-if (!disc.tracks.length) throw new Error(`aucune piste .bin dans ${DISC}`);
+if (!disc.tracks.length) throw new Error(`no .bin track in ${DISC}`);
 
 const bin = Buffer.concat(blobs);
 const version = crypto.createHash('sha256')
@@ -118,8 +118,8 @@ const version = crypto.createHash('sha256')
 fs.writeFileSync(path.join(OUT, 'files.bin'), bin);
 fs.writeFileSync(path.join(OUT, 'files.json'), JSON.stringify({ version, files }, null, 1));
 fs.writeFileSync(path.join(OUT, 'disc.json'), JSON.stringify({ ...disc, dir: DISC }, null, 1));
-console.log(`${path.relative(ROOT, OUT) || '.'}/ prêt : version ${version}, ${files.length} fichiers (${(bin.length / 1024).toFixed(0)} Ko), ` +
-  `${disc.tracks.length} pistes en streaming (${(disc.tracks.reduce((a, t) => a + t.size, 0) / 1048576).toFixed(0)} Mo)`);
+console.log(`${path.relative(ROOT, OUT) || '.'}/ ready: version ${version}, ${files.length} files (${(bin.length / 1024).toFixed(0)} KB), ` +
+  `${disc.tracks.length} streamed tracks (${(disc.tracks.reduce((a, t) => a + t.size, 0) / 1048576).toFixed(0)} MB)`);
 
 // ---- what the browsers download, compressed once (the server sends these as they are)
 const Q = Math.max(0, Math.min(11, +(process.env.CDG_BROTLI ?? 11) | 0));
@@ -141,5 +141,5 @@ if (Q > 0) {
     fs.writeFileSync(path.join(OUT, f + '.gz'), gz);
     raw += data.length; sent += br.length;
   }));
-  console.log(`compression : ${(raw / 1048576).toFixed(1)} Mo -> ${(sent / 1048576).toFixed(1)} Mo à télécharger (Brotli ${Q}, ${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  console.log(`compression: ${(raw / 1048576).toFixed(1)} MB -> ${(sent / 1048576).toFixed(1)} MB to download (Brotli ${Q}, ${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 }

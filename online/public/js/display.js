@@ -24,7 +24,7 @@ export class Display {
     this.seq = -1;
     this.frames = 0;
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
-    if (!gl) throw new Error('WebGL2 indisponible');
+    if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
     const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
     const prog = gl.createProgram();

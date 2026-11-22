@@ -107,7 +107,7 @@ function onJson(c, m) {
   const room = c.room ? rooms.get(c.room) : null;
   switch (m.t) {
     case 'hello':
-      c.name = String(m.name || 'Cochon').slice(0, 24);
+      c.name = String(m.name || 'Hog').slice(0, 24);
       c.fp = String(m.fp || '').slice(0, 128);
       c.serial = String(m.serial || '').slice(0, 32);
       send(c, { t: 'welcome', id: c.id });
@@ -124,11 +124,11 @@ function onJson(c, m) {
     case 'join': {
       const code = String(m.code || '').toUpperCase().trim();
       const r = rooms.get(code);
-      if (!r) { send(c, { t: 'error', code: 'no-room', message: `Salon ${code} introuvable.` }); return; }
-      if (r.members.length >= MAX_ROOM) { send(c, { t: 'error', code: 'full', message: 'Salon complet.' }); return; }
+      if (!r) { send(c, { t: 'error', code: 'no-room', message: `Room ${code} not found.` }); return; }
+      if (r.members.length >= MAX_ROOM) { send(c, { t: 'error', code: 'full', message: 'Room full.' }); return; }
       const host = clients.get(r.host);
       if (host.fp && c.fp && host.fp !== c.fp) {
-        send(c, { t: 'error', code: 'disc', message: 'Votre disque ne correspond pas à celui de l’hôte (même version requise).' });
+        send(c, { t: 'error', code: 'disc', message: 'Your disc does not match the host\'s (the same version is required).' });
         return;
       }
       if (room) leaveRoom(c);
@@ -175,7 +175,7 @@ function onJson(c, m) {
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 32 * 1024 * 1024 });
 wss.on('connection', (ws) => {
-  const c = { id: newId(), ws, name: 'Cochon', fp: '', serial: '', room: null, alive: true };
+  const c = { id: newId(), ws, name: 'Hog', fp: '', serial: '', room: null, alive: true };
   clients.set(c.id, c);
   ws.on('pong', () => { c.alive = true; });
   ws.on('message', (data, isBinary) => {

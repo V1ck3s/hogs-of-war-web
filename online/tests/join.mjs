@@ -17,7 +17,7 @@ const out = path.resolve(process.argv[2] || 'join-out');
 fs.mkdirSync(out, { recursive: true });
 const PORT = 18300 + Math.floor(Math.random() * 90);
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], { env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit'] });
-srv.stdout.on('data', (d) => process.stdout.write('[serveur] ' + d));
+srv.stdout.on('data', (d) => process.stdout.write('[server] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -31,11 +31,11 @@ async function browser(name, q, aspect) {
   });
   const page = await b.newPage();
   await page.setViewport({ width: 1100, height: 620 });
-  page.on('console', (m) => { const t = m.text(); if (/désynchro|error|snapshot|savestate: (LOAD|SAVE)|\[partie\]|\[lockstep\]/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
+  page.on('console', (m) => { const t = m.text(); if (/desync|error|snapshot|savestate: (LOAD|SAVE)|\[game\]|\[lockstep\]/i.test(t)) console.log(`[${name}]`, t.slice(0, 200)); });
   page.on('pageerror', (e) => console.log(`[${name} error]`, e.message));
-  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${roomCode ? '&salon=' + roomCode : ''}`);
+  await page.goto(`http://127.0.0.1:${PORT}/?q=${q}${process.env.GPU === "0" ? "&gpu=0" : ""}${roomCode ? '&room=' + roomCode : ''}`);
   await page.evaluate((a) => { const e = document.querySelector('#aspect'); e.value = a; e.onchange(); }, aspect);
-  await page.waitForFunction(() => /prêt|disque|indisponible/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+  await page.waitForFunction(() => /ready|disc|unavailable/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
   await page.type('#name', name);
   return { b, page, name };
 }
@@ -55,7 +55,7 @@ await guest.page.click('#btn-join');
 await guest.page.waitForFunction(() => document.querySelectorAll('#seats li:not(.empty)').length === 2, { timeout: 30000 });
 await host.page.click('#btn-start');
 await Promise.all([host, guest].map((x) => x.page.waitForFunction(() => document.querySelector('#splash').hidden, { timeout: 120000 })));
-check(true, `salon ${roomCode} en mode Multijoueur : Alice et Bruno ont lancé leur copie`);
+check(true, `room ${roomCode} in Multiplayer mode: Alice and Bruno started their copies`);
 
 const frameOf = async () => (await info(host.page)).frame;
 async function untilFrame(f) { while (await frameOf() < f) await sleep(300); }
@@ -76,16 +76,16 @@ for (;;) {
   if (v.f > 6000) break;
   await sleep(100);
 }
-check([...seen].every((m) => m === LEVEL.toString(16)), `aucun autre menu avant la sélection de niveau (menus vus : ${[...seen].join(', ')})`);
+check([...seen].every((m) => m === LEVEL.toString(16)), `no other menu before the level select (menus seen: ${[...seen].join(', ')})`);
 await untilFrame((await frameOf()) + 60);
-await host.page.screenshot({ path: path.join(out, '1_niveau_alice.png') });
-await guest.page.screenshot({ path: path.join(out, '1_niveau_bruno.png') });
-console.log('      sélection de niveau atteinte à l’image', await frameOf(), '(capture 1_niveau_*)');
+await host.page.screenshot({ path: path.join(out, '1_level_alice.png') });
+await guest.page.screenshot({ path: path.join(out, '1_level_bruno.png') });
+console.log('      level select reached at frame', await frameOf(), '(screenshots 1_level_*)');
 
 // Back is refused on that screen.
 await tap(host.page, 'Backspace', 10); await tap(host.page, 'KeyR', 10);
 await sleep(1500);
-await host.page.screenshot({ path: path.join(out, '2_retour_refuse.png') });
+await host.page.screenshot({ path: path.join(out, '2_back_refused.png') });
 
 // Alice picks the level, then each team is set up by its owner ("JOUEUR
 // SUIVANT" is preselected: one validation per team). While Bruno sets up his
@@ -102,28 +102,28 @@ for (let i = 0; i < 120; i++) {
       await tap(host.page, 'Space', 6); await sleep(1500);
       const y = await info(host.page);
       aliceIgnored = (y.team === x.team && y.holder === 1);
-      await host.page.screenshot({ path: path.join(out, '2b_reglage_bruno.png') });
+      await host.page.screenshot({ path: path.join(out, '2b_setup_bruno.png') });
     }
   }
   await tap(setup && x.holder === 1 ? guest.page : host.page, 'Space', 6);
   await sleep(700);
 }
-check(sawAliceSetup && sawBrunoSetup, `réglage des équipes : Alice puis Bruno ont eu la main sur leur propre équipe`);
-check(aliceIgnored === true, 'pendant que Bruno règle son équipe, la touche d’Alice ne fait rien');
+check(sawAliceSetup && sawBrunoSetup, `team setup: Alice, then Bruno, were in control of their own team`);
+check(aliceIgnored === true, 'while Bruno sets up his team, Alice’s key does nothing');
 
 // Battle
 let a;
 for (let i = 0; i < 400; i++) { a = await info(host.page); if ((a.team & 0xff) && !(a.team & 0x100)) break; await sleep(1000); }
-await host.page.screenshot({ path: path.join(out, '3_bataille_alice.png') });
-console.log(`      bataille : image ${a.frame}, « ${a.turn} »`);
-check(a.team > 0, `la bataille a commencé (équipe ${a.team} joue)`);
+await host.page.screenshot({ path: path.join(out, '3_battle_alice.png') });
+console.log(`      battle: frame ${a.frame}, "${a.turn}"`);
+check(a.team > 0, `the battle has started (team ${a.team} is playing)`);
 
 // Bruno leaves...
 await guest.b.close();
-console.log('      Bruno a fermé son navigateur');
+console.log('      Bruno closed his browser');
 await sleep(15000);
 const a2 = await info(host.page);
-check(a2.frame > a.frame + 200, `Alice continue seule (image ${a2.frame})`);
+check(a2.frame > a.frame + 200, `Alice carries on alone (frame ${a2.frame})`);
 
 // ...and comes back.
 guest = await browser('Bruno', 1, '32:9');
@@ -136,16 +136,16 @@ while (Date.now() - t0 < 300000) {
   if (y.frame > 0 && y.hashOk >= 3 && x.frame > a2.frame) { rejoined = [x, y]; break; }
   await sleep(2000);
 }
-check(!!rejoined, rejoined ? `Bruno a rejoint : il est à l’image ${rejoined[1].frame}, Alice à ${rejoined[0].frame}` : 'Bruno n’a pas pu rejoindre');
+check(!!rejoined, rejoined ? `Bruno has rejoined: he is at frame ${rejoined[1].frame}, Alice at ${rejoined[0].frame}` : 'Bruno could not rejoin');
 await sleep(20000);
-await host.page.screenshot({ path: path.join(out, '4_apres_retour_alice.png') });
-await guest.page.screenshot({ path: path.join(out, '4_apres_retour_bruno.png') });
+await host.page.screenshot({ path: path.join(out, '4_after_return_alice.png') });
+await guest.page.screenshot({ path: path.join(out, '4_after_return_bruno.png') });
 const [x, y] = await Promise.all([info(host.page), info(guest.page)]);
 check(x.desyncs === 0 && y.desyncs === 0 && y.hashOk >= 3,
-  `après le retour, copies identiques : ${y.hashOk} empreintes égales chez Bruno, ${x.desyncs + y.desyncs} désynchronisation`);
-check(x.team === y.team && x.holder === y.holder, `même tour chez les deux : équipe ${x.team}, joueur ${x.holder + 1} (« ${x.turn} » / « ${y.turn} »)`);
+  `after the return, identical copies: ${y.hashOk} matching digests on Bruno's side, ${x.desyncs + y.desyncs} desync(s)`);
+check(x.team === y.team && x.holder === y.holder, `same turn for both: team ${x.team}, player ${x.holder + 1} ("${x.turn}" / "${y.turn}")`);
 await host.b.close();
 await guest.b.close();
 srv.kill();
-console.log(failures ? `${failures} échec(s)` : 'Mode multijoueur, réglage des équipes, départ et retour : tous les contrôles sont passés.');
+console.log(failures ? `${failures} failure(s)` : 'Multiplayer mode, team setup, leaving and returning: all checks passed.');
 process.exit(failures ? 1 : 0);

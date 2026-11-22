@@ -15,11 +15,11 @@ const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], {
   env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', CDG_MAX_ROOMS: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 srv.stdout.on('data', (d) => {
-  process.stdout.write('[serveur] ' + d);
-  const m = String(d).match(/jeu lancé \(:(\d+)/);
+  process.stdout.write('[server] ' + d);
+  const m = String(d).match(/game started \(:(\d+)/);
   if (m) ctlPort = 4400 + +m[1];
 });
-srv.stderr.on('data', (d) => process.stdout.write('[serveur] ' + d));
+srv.stderr.on('data', (d) => process.stdout.write('[server] ' + d));
 await new Promise((r) => srv.stdout.once('data', r));
 const URL = `http://localhost:${PORT}/`;
 const browser = await puppeteer.launch({
@@ -45,7 +45,7 @@ const shot = (p, name) => p.screenshot({ path: path.join(out, name) });
 async function player(name, viewport) {
   const p = await browser.newPage();
   await p.setViewport(viewport);
-  p.on('pageerror', (e) => console.log(`[${name}] erreur: ${e.message}`));
+  p.on('pageerror', (e) => console.log(`[${name}] error: ${e.message}`));
   await p.goto(URL);
   await p.$eval('#name', (el) => { el.value = ''; });
   await p.type('#name', name);
@@ -54,52 +54,52 @@ async function player(name, viewport) {
 
 try {
   // Host on a 16:9 screen creates the game.
-  const host = await player('Hôte', { width: 1280, height: 720 });
+  const host = await player('Host', { width: 1280, height: 720 });
   await host.click('#btn-create');
   await host.waitForFunction(() => window.__cdg.room?.state === 'running', { timeout: 180000 });
-  check(true, 'jeu natif lancé sur le serveur');
+  check(true, 'native game started on the server');
   await host.waitForFunction(() => window.__cdg.stats.videoTotal > 30, { timeout: 120000 });
   let s = await state(host);
-  check(s.video > 30, `vidéo H.264 reçue et décodée (${s.video} images)`);
-  check(Math.abs(s.vcfg.width / s.vcfg.height - 16 / 9) < 0.05, `image rendue au format de l'écran de l'hôte (${s.vcfg.width}x${s.vcfg.height})`);
+  check(s.video > 30, `H.264 video received and decoded (${s.video} frames)`);
+  check(Math.abs(s.vcfg.width / s.vcfg.height - 16 / 9) < 0.05, `picture rendered in the shape of the host's screen (${s.vcfg.width}x${s.vcfg.height})`);
   await sleep(4000);
   s = await state(host);
-  check(s.audio > 48000, `son Opus reçu et décodé (${s.audio} échantillons)`);
-  await shot(host, 'hote-16x9.png');
+  check(s.audio > 48000, `Opus sound received and decoded (${s.audio} samples)`);
+  await shot(host, 'host-16x9.png');
 
   // Keyboard: host presses Start → host holds controller 1.
   await host.keyboard.down('Enter'); await sleep(250); await host.keyboard.up('Enter');
   await sleep(800);
   s = await state(host);
-  check(s.room.holder === s.id, 'le clavier de l’hôte pilote la manette 1');
+  check(s.room.holder === s.id, 'the host keyboard drives controller 1');
   await host.keyboard.down('KeyX');
   await sleep(1200);
   const pad = await padStatus();
   await host.keyboard.up('KeyX');
-  console.log('      pad_status pendant Croix :', JSON.stringify(pad));
+  console.log('      pad_status while Cross is held:', JSON.stringify(pad));
   const word = pad && parseInt(String(pad.pad ?? pad.slot0 ?? pad.override ?? 'ffff'), pad && typeof pad.pad === 'string' ? 16 : 10);
-  check(pad && ((word >> 14) & 1) === 0, 'la touche X du navigateur arrive dans le jeu (Croix enfoncée sur la manette 1)');
+  check(pad && ((word >> 14) & 1) === 0, 'the browser X key reaches the game (Cross pressed on controller 1)');
 
   // A friend joins from a phone-shaped portrait screen.
-  const guest = await player('Invité', { width: 600, height: 900 });
+  const guest = await player('Guest', { width: 600, height: 900 });
   await guest.type('#code', s.room.code);
   await guest.click('#btn-join');
   await guest.waitForFunction(() => window.__cdg.stats.videoTotal > 20, { timeout: 120000 });
-  check(true, 'l’invité reçoit le flux sans posséder le jeu');
+  check(true, 'the guest receives the stream without owning the game');
   await sleep(2500); // host idle > 2 s: the controller can change hands
   await guest.keyboard.down('Enter'); await sleep(250); await guest.keyboard.up('Enter');
   await sleep(800);
   const g = await state(guest);
-  check(g.room.holder === g.id, 'l’invité prend la manette après l’inactivité de l’hôte');
-  await shot(guest, 'invite-portrait.png');
+  check(g.room.holder === g.id, 'the guest takes the controller after the host goes idle');
+  await shot(guest, 'guest-portrait.png');
 
   // Any screen: the guest's window takes many sizes / densities / shapes; the
   // canvas must use the full device resolution and show the picture
   // letterboxed (game pixels present, black only outside the picture).
   const screens = [
     [3840, 2160, 1, '4K 16:9'], [1920, 1080, 2, '1080p HiDPI ×2'], [2560, 1080, 1, '21:9'],
-    [1024, 768, 1, '4:3'], [1440, 900, 1.5, '16:10 ×1.5'], [390, 844, 3, 'téléphone portrait ×3'],
-    [844, 390, 3, 'téléphone paysage ×3'], [800, 600, 1, 'SVGA'],
+    [1024, 768, 1, '4:3'], [1440, 900, 1.5, '16:10 ×1.5'], [390, 844, 3, 'phone portrait ×3'],
+    [844, 390, 3, 'phone landscape ×3'], [800, 600, 1, 'SVGA'],
   ];
   for (const [w, h, dpr, label] of screens) {
     await guest.bringToFront();
@@ -130,8 +130,8 @@ try {
     });
     const full = Math.abs(r.cw - Math.round(r.vw * Math.min(r.dpr, 3))) <= 2 && Math.abs(r.ch - Math.round(r.vh * Math.min(r.dpr, 3))) <= 2;
     const fits = r.dw <= r.cw && r.dh <= r.ch && (r.dw >= r.cw - 2 || r.dh >= r.ch - 2);
-    check(full && fits && r.fw > 0 && r.err < 24, `écran ${label} (${w}x${h} ×${dpr}) : toile ${r.cw}x${r.ch}, image ${r.dw}x${r.dh} ajustée, écart moyen à l'image décodée ${r.err.toFixed(1)}/255`);
-    await shot(guest, `invite-${w}x${h}.png`);
+    check(full && fits && r.fw > 0 && r.err < 24, `screen ${label} (${w}x${h} ×${dpr}): canvas ${r.cw}x${r.ch}, picture fitted at ${r.dw}x${r.dh}, mean difference from the decoded frame ${r.err.toFixed(1)}/255`);
+    await shot(guest, `guest-${w}x${h}.png`);
   }
   await guest.setViewport({ width: 600, height: 900 });
 
@@ -141,10 +141,10 @@ try {
   await host.waitForFunction(() => window.__cdg.vcfg && window.__cdg.vcfg.width / window.__cdg.vcfg.height > 2.2, { timeout: 60000 });
   await host.waitForFunction((n) => window.__cdg.stats.videoTotal > n + 20, { timeout: 60000 }, (await state(host)).video);
   s = await state(host);
-  check(true, `format ultra-large appliqué (${s.vcfg.width}x${s.vcfg.height})`);
+  check(true, `ultrawide shape applied (${s.vcfg.width}x${s.vcfg.height})`);
   await sleep(1500);
-  await shot(host, 'hote-21x9.png');
-  await shot(guest, 'invite-apres-21x9.png');
+  await shot(host, 'host-21x9.png');
+  await shot(guest, 'guest-after-21x9.png');
 } catch (e) {
   console.error(e); failures++;
 } finally {
@@ -152,5 +152,5 @@ try {
   srv.kill('SIGTERM');
   await sleep(3000);
 }
-console.log(failures ? `${failures} échec(s)` : 'Tous les tests e2e sont passés.');
+console.log(failures ? `${failures} failure(s)` : 'All e2e tests passed.');
 process.exit(failures ? 1 : 0);

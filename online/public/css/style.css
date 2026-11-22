@@ -66,7 +66,7 @@ label { display: block; color: var(--muted); margin: 12px 0 5px; font-size: 13px
 .join input::placeholder { letter-spacing: .3em; font-weight: 500; }
 .join button { flex: none; }
 .room-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.room-list:empty::before { content: "Aucun salon ouvert pour l’instant."; color: var(--muted); font-size: 13px; }
+.room-list:empty::before { content: "No open rooms yet."; color: var(--muted); font-size: 13px; }
 .room-list li { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(0, 0, 0, .14); }
 .room-list .what { flex: 1; min-width: 0; }
 .room-list .what b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -133,7 +133,7 @@ body.is-host .spaced-host { margin-top: 22px; }
 
 /* ---------- chat */
 .chat { max-height: 180px; overflow-y: auto; background: rgba(0, 0, 0, .2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 14px; overflow-wrap: anywhere; }
-.chat:empty::before { content: "Personne n’a encore écrit."; color: var(--muted); font-size: 13px; }
+.chat:empty::before { content: "No messages yet."; color: var(--muted); font-size: 13px; }
 .chat div { margin: 2px 0; }
 .chat b { color: var(--pink); }
 .chat-form { display: flex; gap: 6px; margin-top: 8px; }

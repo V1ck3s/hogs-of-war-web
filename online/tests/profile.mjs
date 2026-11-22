@@ -22,7 +22,7 @@ const page = await b.newPage();
 await page.setViewport({ width: 1280, height: 720 });
 await page.goto(`http://127.0.0.1:${PORT}/?diag=1&q=${process.env.Q || 1}&gpu=${process.env.GPU ?? 1}${process.env.RASTER ? "&raster=1" : ""}`);
 page.on('console', (m) => { const t = m.text(); if (/runtime cadence/.test(t)) console.log('     ', t.match(/guest=[0-9.]+ Hz/)[0], t.match(/work guest=[0-9.]+/)[0]); });
-await page.waitForFunction(() => /prêt/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+await page.waitForFunction(() => /ready/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
 await page.click('#btn-create');
 await page.waitForSelector('#room:not([hidden])');
 if (process.env.ASPECT) await page.select('#aspect', process.env.ASPECT);
@@ -36,9 +36,9 @@ for (let i = 0; i < 4; i++) { await untilFrame(f); await tap('Enter'); f += 137;
 f += 150;
 for (let i = 0; i < 45; i++) { await untilFrame(f); await tap('Space'); f += 84; }
 await untilFrame(f + 200);
-console.log('mission à l’image', await frame(), '— profil sur', SECONDS, 's');
+console.log('mission at frame', await frame(), '— profiling for', SECONDS, 's');
 const probe = () => page.evaluate(() => { const M = window.__cdg.state.game; return M._swt_probe ? [0, 1, 2, 3, 4, 5, 6].map((i) => M._swt_probe(i)) : null; });
-console.log('rendu côté émulation [config, largeur, relecture, relectures, primitives sautées] :', JSON.stringify(await probe()));
+console.log('emulation-side rendering [config, width, readback, readbacks, skipped primitives]:', JSON.stringify(await probe()));
 if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
 
 const sessions = [];
@@ -73,13 +73,13 @@ for (const s of sessions) {
   }
   if (mt > 0.05 * SECONDS * 1e6) {
     const t5 = [...mine.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-    console.log(`thread : ${(mt / 1e6).toFixed(2)} s CPU (${(100 * mt / (SECONDS * 1e6)).toFixed(0)} % d’un cœur)`);
+    console.log(`thread: ${(mt / 1e6).toFixed(2)} s CPU (${(100 * mt / (SECONDS * 1e6)).toFixed(0)}% of a core)`);
     for (const [n, us] of t5) console.log(`    ${(100 * us / mt).toFixed(1).padStart(5)} %  ${n}`);
   }
 }
 const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40);
-console.log(`total ${(total / 1e6).toFixed(1)} s de CPU échantillonnés sur ${sessions.length} threads`);
+console.log(`total ${(total / 1e6).toFixed(1)} s of CPU sampled over ${sessions.length} threads`);
 for (const [n, us] of top) console.log(`${(100 * us / total).toFixed(1).padStart(5)} %  ${n}`);
-console.log('fin [config, largeur, relecture, relectures, primitives sautées] :', JSON.stringify(await probe()));
+console.log('end [config, width, readback, readbacks, skipped primitives]:', JSON.stringify(await probe()));
 await b.close();
 srv.kill();

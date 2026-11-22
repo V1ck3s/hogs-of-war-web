@@ -7,8 +7,8 @@ export const BIT = {
 };
 
 export const ACTIONS = [
-  ['up', 'Haut'], ['down', 'Bas'], ['left', 'Gauche'], ['right', 'Droite'],
-  ['cross', 'Croix ✕'], ['circle', 'Rond ○'], ['square', 'Carré □'], ['triangle', 'Triangle △'],
+  ['up', 'Up'], ['down', 'Down'], ['left', 'Left'], ['right', 'Right'],
+  ['cross', 'Cross ✕'], ['circle', 'Circle ○'], ['square', 'Square □'], ['triangle', 'Triangle △'],
   ['l1', 'L1'], ['r1', 'R1'], ['l2', 'L2'], ['r2', 'R2'],
   ['start', 'Start'], ['select', 'Select'],
 ];
@@ -96,14 +96,14 @@ export class Input {
 export function keyLabel(code) {
   if (!code) return '—';
   const named = {
-    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Entrée',
-    Backspace: 'Retour arr.', Space: 'Espace', ShiftLeft: 'Maj gauche', ShiftRight: 'Maj droite',
-    ControlLeft: 'Ctrl gauche', ControlRight: 'Ctrl droite', Tab: 'Tab', Escape: 'Échap',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Enter',
+    Backspace: 'Backspace', Space: 'Space', ShiftLeft: 'Left Shift', ShiftRight: 'Right Shift',
+    ControlLeft: 'Left Ctrl', ControlRight: 'Right Ctrl', Tab: 'Tab', Escape: 'Esc',
   };
   if (named[code]) return named[code];
   if (code.startsWith('Key')) return layoutLabel(code) || code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
-  if (code.startsWith('Numpad')) return 'Pavé ' + code.slice(6);
+  if (code.startsWith('Numpad')) return 'Numpad ' + code.slice(6);
   return code;
 }
 

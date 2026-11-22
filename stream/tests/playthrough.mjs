@@ -16,7 +16,7 @@ const PORT = 18700 + Math.floor(Math.random() * 200);
 const srv = spawn(process.execPath, [path.join(HERE, '../server/index.mjs')], {
   env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
-srv.stdout.on('data', (d) => { if (!/ffmpeg/.test(d)) process.stdout.write('[serveur] ' + d); });
+srv.stdout.on('data', (d) => { if (!/ffmpeg/.test(d)) process.stdout.write('[server] ' + d); });
 await new Promise((r) => srv.stdout.once('data', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await puppeteer.launch({
@@ -38,16 +38,16 @@ let serverLog = '';
 srv.stdout.on('data', (d) => { serverLog += d; });
 async function displayOf(code) {
   for (let i = 0; i < 100; i++) {
-    const m = serverLog.match(new RegExp(`salon ${code} : jeu lancé \\(:(\\d+)`));
+    const m = serverLog.match(new RegExp(`room ${code}: game started \\(:(\\d+)`));
     if (m) return m[1];
     await sleep(200);
   }
-  throw new Error('display inconnu');
+  throw new Error('unknown display');
 }
 const host = await browser.newPage();
 await host.setViewport({ width: 1680, height: 720 }); // 21:9 screen
 await host.goto(`http://localhost:${PORT}/`);
-await host.$eval('#name', (el) => { el.value = 'Hôte'; });
+await host.$eval('#name', (el) => { el.value = 'Host'; });
 await host.evaluate(() => { window.__cdgRecord = true; });
 await host.click('#btn-create');
 await host.waitForFunction(() => window.__cdg.room?.state === 'running', { timeout: 180000 });
@@ -56,8 +56,8 @@ const code = await host.evaluate(() => window.__cdg.room.code);
 const port = 4400 + +(await displayOf(code));
 const guest = await browser.newPage();
 await guest.setViewport({ width: 1280, height: 800 }); // 16:10 laptop
-await guest.goto(`http://localhost:${PORT}/#salon=${code}`);
-await guest.$eval('#name', (el) => { el.value = 'Invité'; });
+await guest.goto(`http://localhost:${PORT}/#room=${code}`);
+await guest.$eval('#name', (el) => { el.value = 'Guest'; });
 await guest.click('#btn-join');
 await host.bringToFront();
 
@@ -77,7 +77,7 @@ for (;;) {
   if (f < 0) { await sleep(500); continue; }
   while (next < script.length && f >= script[next][0]) { await tap(script[next][1]); next++; }
   if (f >= shot) {
-    await host.screenshot({ path: path.join(out, `hote_${String(f).padStart(6, '0')}.png`) });
+    await host.screenshot({ path: path.join(out, `host_${String(f).padStart(6, '0')}.png`) });
     shot = f + 400;
   }
   if (!guestDone && f >= GUEST_AT) {
@@ -85,17 +85,17 @@ for (;;) {
     await guest.bringToFront();
     for (let i = 0; i < 6; i++) { await guest.keyboard.down('ArrowLeft'); await sleep(400); await guest.keyboard.up('ArrowLeft'); await sleep(200); }
     const g = await guest.evaluate(() => ({ holder: window.__cdg.room.holder, id: window.__cdg.id }));
-    console.log(g.holder === g.id ? 'OK   l’invité joue (manette 1) pendant la bataille' : 'FAIL l’invité n’a pas pris la manette');
-    await guest.screenshot({ path: path.join(out, 'invite_joue.png') });
+    console.log(g.holder === g.id ? 'OK   the guest plays (controller 1) during the battle' : 'FAIL the guest did not take the controller');
+    await guest.screenshot({ path: path.join(out, 'guest_plays.png') });
     await host.bringToFront();
   }
   if (f >= END) break;
   await sleep(50);
 }
-await guest.screenshot({ path: path.join(out, 'invite_bataille.png') });
-await host.screenshot({ path: path.join(out, 'hote_bataille.png') });
+await guest.screenshot({ path: path.join(out, 'guest_battle.png') });
+await host.screenshot({ path: path.join(out, 'host_battle.png') });
 const stats = await host.evaluate(() => ({ vcfg: window.__cdg.vcfg, video: window.__cdg.stats.videoTotal }));
-console.log('flux hôte', stats);
+console.log('host stream', stats);
 // Audio the player actually received, as 48 kHz stereo WAV.
 const pcm = await host.evaluate(() => {
   const chunks = window.__cdg.recorded || [];
@@ -111,8 +111,8 @@ const h = Buffer.alloc(44);
 h.write('RIFF', 0); h.writeUInt32LE(36 + data.length, 4); h.write('WAVEfmt ', 8); h.writeUInt32LE(16, 16);
 h.writeUInt16LE(1, 20); h.writeUInt16LE(2, 22); h.writeUInt32LE(48000, 24); h.writeUInt32LE(192000, 28);
 h.writeUInt16LE(4, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(data.length, 40);
-fs.writeFileSync(path.join(out, 'son_recu.wav'), Buffer.concat([h, data]));
-console.log(`son reçu par le joueur : ${(data.length / 192000).toFixed(0)} s`);
+fs.writeFileSync(path.join(out, 'received_sound.wav'), Buffer.concat([h, data]));
+console.log(`sound received by the player: ${(data.length / 192000).toFixed(0)} s`);
 await browser.close();
 srv.kill('SIGTERM');
 await sleep(3000);

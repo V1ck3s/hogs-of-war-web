@@ -9,7 +9,7 @@ export async function unzip(file, onProgress) {
   const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
   let eocd = -1;
   for (let i = tailLen - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw new Error('Archive ZIP illisible.');
+  if (eocd < 0) throw new Error('Unreadable ZIP archive.');
   let count = tail.getUint16(eocd + 10, true);
   let cdSize = tail.getUint32(eocd + 12, true);
   let cdOff = tail.getUint32(eocd + 16, true);
@@ -81,8 +81,8 @@ export async function unzip(file, onProgress) {
       }
       if (chunkLen) pieces.push(new Blob(chunk));
       blob = new Blob(pieces);
-      if (blob.size !== e.usize) throw new Error(`Archive corrompue (${base}).`);
-    } else throw new Error(`Méthode de compression ZIP ${e.method} non prise en charge.`);
+      if (blob.size !== e.usize) throw new Error(`Corrupt archive (${base}).`);
+    } else throw new Error(`Unsupported ZIP compression method ${e.method}.`);
     done += e.usize;
     out.push(new File([blob], base));
   }
@@ -102,7 +102,7 @@ export async function prepareDisc(fileList, onProgress) {
     if (/\.zip$/i.test(f.name) || await isZip(f)) files.push(...(await unzip(f, onProgress)));
     else if (DISC_EXT.test(f.name)) files.push(f);
   }
-  if (!files.length) throw new Error('Aucun fichier de disque reconnu (.cue/.bin, .chd, .iso ou .zip).');
+  if (!files.length) throw new Error('No recognised disc file (.cue/.bin, .chd, .iso or .zip).');
   const byName = new Map(files.map((f) => [f.name, f]));
   const cue = files.find((f) => /\.cue$/i.test(f.name));
   let entry;
@@ -110,7 +110,7 @@ export async function prepareDisc(fileList, onProgress) {
     const text = await cue.text();
     const refs = [...text.matchAll(/FILE\s+"([^"]+)"/gi)].map((m) => m[1]);
     const missing = refs.filter((r) => !byName.has(r.split(/[\\/]/).pop()));
-    if (missing.length) throw new Error('Fichiers manquants pour le CUE : ' + missing.join(', '));
+    if (missing.length) throw new Error('Files missing for the CUE: ' + missing.join(', '));
     entry = cue.name;
     // SBI companion must share the CUE basename for the core to find it.
     const sbi = files.find((f) => /\.sbi$/i.test(f.name));
@@ -120,7 +120,7 @@ export async function prepareDisc(fileList, onProgress) {
     }
   } else {
     const main = files.find((f) => /\.(chd|iso|img|bin)$/i.test(f.name));
-    if (!main) throw new Error('Image de disque introuvable.');
+    if (!main) throw new Error('Disc image not found.');
     entry = main.name;
   }
   return { files: files.map((f) => ({ name: f.name, file: f })), entry };

@@ -1,4 +1,4 @@
-// Cochons de Guerre — client de streaming (navigateur).
+// Cochons de Guerre — streaming client (browser).
 // Receives H.264 + Opus from the server, decodes with WebCodecs, draws the
 // picture letterboxed into whatever screen shape the player has, and sends
 // the pad state back.
@@ -42,26 +42,26 @@ function renderRoom() {
   ul.innerHTML = '';
   for (const m of r.members) {
     const li = document.createElement('li');
-    li.textContent = m.name + (m.id === r.host ? ' ★' : '') + (m.id === S.id ? ' (vous)' : '') + (m.spectator ? ' — spectateur' : '');
+    li.textContent = m.name + (m.id === r.host ? ' ★' : '') + (m.id === S.id ? ' (you)' : '') + (m.spectator ? ' — spectator' : '');
     if (m.id === r.holder) li.classList.add('holder');
     ul.appendChild(li);
   }
-  $('#holder').textContent = r.holder ? (r.holder === S.id ? 'Vous avez la manette' : `Manette : ${nameOf(r.holder)}`) : 'Manette libre';
+  $('#holder').textContent = r.holder ? (r.holder === S.id ? 'You have the controller' : `Controller: ${nameOf(r.holder)}`) : 'Controller free';
   $('#quality').value = r.quality;
   $('#turbo').checked = !!r.turbo;
-  const st = { starting: 'Démarrage du jeu sur le serveur…', running: '', stopped: r.error || 'Jeu arrêté.' }[r.state] || '';
+  const st = { starting: 'Starting the game on the server…', running: '', stopped: r.error || 'Game stopped.' }[r.state] || '';
   $('#splash').hidden = r.state === 'running' && !S.needKey;
-  $('#splash-text').textContent = st || 'Réception de l’image…';
+  $('#splash-text').textContent = st || 'Receiving the picture…';
 }
 
 function addChat(name, text) {
   const p = document.createElement('p');
   const b = document.createElement('b');
-  b.textContent = name + ' : ';
+  b.textContent = name + ': ';
   p.append(b, document.createTextNode(text));
   $('#chat-log').appendChild(p);
   $('#chat-log').scrollTop = 1e9;
-  if ($('#panel').hidden) toast(`${name} : ${text}`);
+  if ($('#panel').hidden) toast(`${name}: ${text}`);
 }
 
 // ------------------------------------------------------------------ network
@@ -71,8 +71,8 @@ function connect() {
     ws.binaryType = 'arraybuffer';
     S.ws = ws;
     ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: S.name }));
-    ws.onerror = () => reject(new Error('Serveur injoignable.'));
-    ws.onclose = () => { toast('Connexion au serveur perdue.'); S.room = null; renderRoom(); };
+    ws.onerror = () => reject(new Error('Server unreachable.'));
+    ws.onclose = () => { toast('Connection to the server lost.'); S.room = null; renderRoom(); };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') { onBinary(ev.data); return; }
       const m = JSON.parse(ev.data);
@@ -96,11 +96,11 @@ function renderRooms(list, max) {
   el.innerHTML = '';
   for (const r of list || []) {
     const b = document.createElement('button');
-    b.textContent = `Rejoindre ${r.code} (${r.members} joueur${r.members > 1 ? 's' : ''})`;
+    b.textContent = `Join ${r.code} (${r.members} player${r.members > 1 ? 's' : ''})`;
     b.onclick = () => join(r.code);
     el.appendChild(b);
   }
-  $('#capacity').textContent = `Parties simultanées sur ce serveur : ${max}`;
+  $('#capacity').textContent = `Concurrent games on this server: ${max}`;
 }
 
 // ------------------------------------------------------------------ media
@@ -126,7 +126,7 @@ function onBinary(buf) {
 }
 
 function resetVideo(err) {
-  if (err) console.warn('vidéo', err);
+  if (err) console.warn('video', err);
   S.needKey = true;
   send({ t: 'keyframe' });
   if (S.vcfg) configureVideo(S.vcfg);
@@ -136,7 +136,7 @@ function configureVideo(cfg) {
   S.vcfg = cfg;
   if (!('VideoDecoder' in window)) {
     $('#splash').hidden = false;
-    $('#splash-text').textContent = 'Votre navigateur ne gère pas WebCodecs : utilisez Chrome, Edge, Firefox récent ou Safari 17+.';
+    $('#splash-text').textContent = 'Your browser does not support WebCodecs: use Chrome, Edge, a recent Firefox or Safari 17+.';
     return;
   }
   try { if (S.vdec && S.vdec.state !== 'closed') S.vdec.close(); } catch { /* ignore */ }
@@ -164,7 +164,7 @@ async function initAudio() {
     S.anode.connect(S.actx.destination);
     S.anode.port.onmessage = (e) => { if (e.data && e.data.underrun) S.stats.underruns = (S.stats.underruns || 0) + 1; };
     S.anode.port.postMessage({ volume: +($('#volume').value || 0.8) });
-    if (!('AudioDecoder' in window)) { toast('Son indisponible : AudioDecoder non pris en charge par ce navigateur.'); return; }
+    if (!('AudioDecoder' in window)) { toast('No sound: this browser does not support AudioDecoder.'); return; }
     S.adec = new AudioDecoder({
       output: (data) => {
         const n = data.numberOfFrames, ch = data.numberOfChannels;
@@ -184,7 +184,7 @@ async function initAudio() {
       error: (e) => console.warn('audio', e),
     });
     S.adec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
-  } catch (e) { console.warn(e); toast('Audio indisponible.'); }
+  } catch (e) { console.warn(e); toast('Audio unavailable.'); }
 }
 
 // ------------------------------------------------------------------ drawing
@@ -250,12 +250,12 @@ setInterval(() => {
   S.stats.kbps = (S.stats.bytes * 8) / 1000 / dt;
   S.stats.frames = 0; S.stats.bytes = 0; S.stats.t0 = now;
   send({ t: 'ping', ts: now });
-  $('#stats').textContent = `${S.stats.fps.toFixed(0)} img/s · ${(S.stats.kbps / 1000).toFixed(1)} Mb/s · ${S.stats.rtt.toFixed(0)} ms`;
+  $('#stats').textContent = `${S.stats.fps.toFixed(0)} fps · ${(S.stats.kbps / 1000).toFixed(1)} Mb/s · ${S.stats.rtt.toFixed(0)} ms`;
 }, 1000);
 
 // ------------------------------------------------------------------ actions
 async function ensureConnected() {
-  S.name = $('#name').value.trim() || 'Cochon';
+  S.name = $('#name').value.trim() || 'Hog';
   try { localStorage.setItem('cdg.stream.name', S.name); } catch { /* ignore */ }
   await initAudio();
   if (S.actx?.state === 'suspended') S.actx.resume();
@@ -272,7 +272,7 @@ async function create() {
 
 async function join(code) {
   code = (code || $('#code').value).trim().toUpperCase();
-  if (!code) { toast('Entrez le code du salon.'); return; }
+  if (!code) { toast('Enter the room code.'); return; }
   try { await ensureConnected(); send({ t: 'join', code }); } catch (e) { toast(e.message); }
 }
 
@@ -292,7 +292,7 @@ function renderKeys() {
     const b = document.createElement('button');
     b.className = 'key';
     b.textContent = (input.keys[a] || []).map(keyLabel).join(' / ') || '—';
-    b.onclick = () => { b.textContent = 'Appuyez sur une touche…'; input.capture = (code) => { if (code !== 'Escape') input.setKey(a, code); renderKeys(); }; };
+    b.onclick = () => { b.textContent = 'Press a key…'; input.capture = (code) => { if (code !== 'Escape') input.setKey(a, code); renderKeys(); }; };
     td2.appendChild(b);
     tr.append(td, td2);
     tb.appendChild(tr);
@@ -308,7 +308,7 @@ function wire() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) onShape(); });
 
   try { $('#name').value = localStorage.getItem('cdg.stream.name') || ''; } catch { /* ignore */ }
-  const m = location.hash.match(/salon=([A-Z]{4})/i);
+  const m = location.hash.match(/(?:room|salon)=([A-Z]{4})/i);
   if (m) { $('#code').value = m[1].toUpperCase(); $('#invite').hidden = false; $('#invite-code').textContent = m[1].toUpperCase(); }
 
   $('#btn-create').onclick = create;
@@ -318,8 +318,8 @@ function wire() {
   $('#btn-leave').onclick = () => { send({ t: 'leave' }); togglePanel(false); };
   $('#btn-full').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.());
   $('#btn-copy').onclick = () => {
-    const url = `${location.origin}${location.pathname}#salon=${S.room.code}`;
-    navigator.clipboard?.writeText(url).then(() => toast('Lien d’invitation copié.'), () => toast(url, 10000));
+    const url = `${location.origin}${location.pathname}#room=${S.room.code}`;
+    navigator.clipboard?.writeText(url).then(() => toast('Invite link copied.'), () => toast(url, 10000));
   };
   $('#quality').onchange = (e) => send({ t: 'quality', quality: e.target.value });
   $('#turbo').onchange = (e) => send({ t: 'turbo', on: e.target.checked });
