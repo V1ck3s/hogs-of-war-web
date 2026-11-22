@@ -59,6 +59,30 @@ compile jobs; by default from the memory size), `EMSDK` (an Emscripten
 already installed), `CDG_BUILD_ONLY=1` (prepare everything without starting
 the server), `CDG_YES=1` (install packages without asking).
 
+## With Docker
+
+Only Docker is needed: the image holds the tools, and the container builds the
+game from your disc on its first start.
+
+```bash
+mkdir hogs-of-war && cd hogs-of-war
+# copy docker-compose.yml from this repository here,
+# and put your disc (.cue, .bin tracks and .sbi, or a .zip) in a disc/ folder
+docker compose up -d
+docker compose logs -f     # first start: the game is built (20 minutes to an hour)
+```
+
+Then open **http://localhost:8090**. Everything built from the disc is kept
+in the `data` volume, so later starts take seconds; `docker compose down -v`
+deletes it.
+
+The image is built by GitHub Actions on every push to `main` and published
+with this repository's packages as `ghcr.io/v1ck3s/hogs-of-war-web` (`latest`,
+`sha-<commit>`, and `1.2.3` for a `v1.2.3` tag). It contains no game data. While
+the repository is private, log in first (`docker login ghcr.io`, with a token
+allowed to read packages), or build the image yourself from a clone:
+`git clone --recurse-submodules …`, then `docker compose up -d --build`.
+
 ## Repository layout
 
 | Folder | Role |
@@ -66,6 +90,7 @@ the server), `CDG_YES=1` (install packages without asking).
 | `cochons/` | recompilation settings for the French disc (addresses, patches, mods) |
 | `online/` | game server and web page (lockstep, disc streaming, tests) |
 | `psxrecomp/` | the recompilation and runtime engine (submodule, `psxrecomp` branch of this repository) |
+| `Dockerfile`, `docker/`, `docker-compose.yml` | Docker image (tools only) and its use; built by `.github/workflows/docker.yml` |
 | `web/`, `stream/` | earlier experiments (in-browser emulation, video streaming), superseded by `online/` |
 
 The `disc/`, `cochons/disc/`, `cochons/generated/`, `cochons/build*/`,

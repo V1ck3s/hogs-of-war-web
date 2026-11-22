@@ -28,9 +28,10 @@ say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[31mError: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- the disc
+# (find -H: in the Docker image the working folders are links to a volume.)
 mkdir -p disc
-find_cue() { find "$1" -maxdepth 2 -iname '*.cue' -print 2>/dev/null | sort | head -n 1; }
-find_sbi() { find "$1" -maxdepth 2 -iname '*.sbi' -print 2>/dev/null | sort | head -n 1; }
+find_cue() { find -H "$1" -maxdepth 2 -iname '*.cue' -print 2>/dev/null | sort | head -n 1; }
+find_sbi() { find -H "$1" -maxdepth 2 -iname '*.sbi' -print 2>/dev/null | sort | head -n 1; }
 CUE=$(find_cue disc)
 if [ -z "$CUE" ] || [ -z "$(find_sbi disc)" ]; then
     # Archives (.zip): the disc and its .sbi, in one archive or several.
@@ -166,7 +167,7 @@ if [ ! -d node_modules/ws ]; then
 fi
 if [ ! -f game/files.json ] || [ "$BUILD/Cochons_de_Guerre.wasm" -nt game/files.json ] \
    || [ "$BUILD/game.toml" -nt game/files.json ] \
-   || [ -n "$(find "$COCHONS/disc" -newer game/files.json -print -quit)" ]; then
+   || [ -n "$(find -H "$COCHONS/disc" -newer game/files.json -print -quit)" ]; then
     say "Preparing the files sent to browsers"
     node tools/prepare.mjs
 fi

@@ -1,0 +1,26 @@
+# Cochons de Guerre Online with Docker:
+#
+#   1. put your disc (the .cue, its .bin tracks and its .sbi, or a .zip that
+#      holds them) in a disc/ folder next to this file;
+#   2. docker compose up -d
+#   3. open http://localhost:8090
+#
+# The first start builds the game from the disc (20 minutes to an hour; follow
+# it with `docker compose logs -f`). The result is kept in the "data" volume:
+# later starts take seconds.
+services:
+  game:
+    image: ghcr.io/v1ck3s/hogs-of-war-web:latest
+    build: .
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./disc:/app/disc
+      - data:/data
+    environment:
+      # Parallel compile jobs for the first build (default: from the memory).
+      CDG_JOBS: ${CDG_JOBS:-}
+    restart: unless-stopped
+
+volumes:
+  data:

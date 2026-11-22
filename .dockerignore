@@ -1,0 +1,19 @@
+# Nothing from the disc, nothing built locally: the image holds tools only.
+.git
+**/.git
+disc
+disc-fr
+.cache
+**/__pycache__
+**/node_modules
+cochons/disc
+cochons/generated
+cochons/build*
+cochons/.cache
+cochons/saves
+online/game
+online/game-prev
+online/recordings
+online/ui-out
+psxrecomp/recompiler/build*
+web/tests/tmp
