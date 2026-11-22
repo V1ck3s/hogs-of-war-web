@@ -4,7 +4,8 @@
 // the recompiled game (WebAssembly, provided by the server, disc streamed on
 // demand) from frame 0, and the lockstep worker feeds it every participant's
 // inputs frame by frame. Each player has their own running copy of the game.
-import { Input, ACTIONS, keyLabel } from './input.js';
+import { Input, ACTIONS, actionLabel, keyLabel, layoutReady } from './input.js';
+import { t, getLang, setLang, onLangChange, applyDom } from './i18n.js';
 import { Display, GpuDisplay } from './display.js';
 
 const $ = (s) => document.querySelector(s);
@@ -19,6 +20,7 @@ const state = {
   audio: null, session: null, players: [], names: new Map(), lastStats: null,
 };
 const input = new Input();
+applyDom();
 
 // ------------------------------------------------------------------ UI basics
 function show(section) {
@@ -43,12 +45,11 @@ async function copyInvite(e) {
   try {
     await navigator.clipboard.writeText(inviteLink());
     if (b) {
-      b.dataset.label ||= b.textContent;
-      b.textContent = 'Link copied ✓';
+      b.textContent = t('room.copied');
       clearTimeout(b.timer);
-      b.timer = setTimeout(() => { b.textContent = b.dataset.label; }, 2000);
-    } else toast('Link copied.');
-  } catch { prompt('Invitation link:', inviteLink()); }
+      b.timer = setTimeout(() => { b.textContent = t(b.dataset.i18n); }, 2000);
+    } else toast(t('room.copiedToast'));
+  } catch { prompt(t('room.linkPrompt'), inviteLink()); }
 }
 
 const cleanCode = (v) => String(v || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
@@ -58,7 +59,7 @@ if (invited.length === 4) {
   $('#invite').hidden = false;
   $('#invite-code').textContent = invited;
   $('#code').value = invited;
-  $('#btn-invite-join').textContent = `Join room ${invited}`;
+  delete $('#btn-invite-join').dataset.i18n;   // its text names the room (language switch below)
   $('#btn-create').classList.remove('primary');   // the invitation is what the page puts forward
 }
 if (!$('#name').value) $('#name').focus();
@@ -76,7 +77,7 @@ async function compileGame(url) {
 }
 const preload = (async () => {
   const info = await (await fetch('/game/info.json')).json();
-  if (!info.ready) throw new Error('The server has not prepared the game yet.');
+  if (!info.ready) throw new Error(t('load.notReady'));
   state.version = info.version;
   $('#build').textContent = `· version ${String(info.version).slice(0, 8)}`;
   const v = `?v=${info.version}`;
@@ -98,10 +99,10 @@ function showLoad() {
   const discPart = d && d.total ? d.done / d.total : (d ? 1 : 0);
   const pct = Math.floor(((loadState.game ? 15 : 0) + 85 * discPart));
   let text;
-  if (loadState.failed) text = `Game unavailable: ${loadState.failed}`;
-  else if (!loadState.game) text = 'Preloading the game…';
-  else if (d && d.total && d.done < d.total) text = `Preloading the disc: ${(d.done * d.chunk / 1048576).toFixed(0)} / ${(d.total * d.chunk / 1048576).toFixed(0)} MB (${pct}%) — you can start before it finishes, the rest will arrive during the game.`;
-  else text = 'Game and disc preloaded: ready to play.';
+  if (loadState.failed) text = t('load.unavailable', loadState.failed);
+  else if (!loadState.game) text = t('load.game');
+  else if (d && d.total && d.done < d.total) text = t('load.disc', (d.done * d.chunk / 1048576).toFixed(0), (d.total * d.chunk / 1048576).toFixed(0), pct);
+  else text = t('load.done');
   for (const [t, b] of [['#preload', '#preload-bar'], ['#preload2', '#preload-bar2']]) {
     $(t).textContent = text;
     $(b).style.width = `${loadState.failed ? 100 : Math.max(pct, 3)}%`;
@@ -127,20 +128,20 @@ if (params.get('prefetch') !== '0') {
 } else loadState.disc = { done: 0, total: 0, chunk: 0 };
 
 // ------------------------------------------------------------------ socket
-const myName = () => $('#name').value.trim() || 'Hog';
+const myName = () => $('#name').value.trim() || t('name.default');
 function connect() {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     state.ws = ws;
     ws.onopen = () => { state.helloName = myName(); ws.send(JSON.stringify({ t: 'hello', name: state.helloName })); };
-    ws.onerror = () => reject(new Error('Cannot connect to the server. Check the link, then try again.'));
+    ws.onerror = () => reject(new Error(t('err.connect')));
     ws.onclose = () => {
       clearInterval(ws.pinger);
       if (state.ws !== ws || !state.room) return;
-      if (state.game) { toast('Connection to the server lost.', 8000); return; }
+      if (state.game) { toast(t('err.lostGame'), 8000); return; }
       state.room = null;
       show('#lobby');
-      lobbyError('The connection to the server was lost. Join the room again.');
+      lobbyError(t('err.lost'));
     };
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (e) => {
@@ -160,7 +161,7 @@ function onMessage(m) {
     case 'go': startGame(m); break;
     case 'snapreq': takeSnapshot(m); break;
     case 'resync': state.resyncMeta = m; break;   // the snapshot bytes follow
-    case 'ended': stopGame(); show('#room'); toast('Game ended by the host.'); break;
+    case 'ended': stopGame(); show('#room'); toast(t('game.ended')); break;
     case 'in':
       // A player joining receives inputs while their game is still starting:
       // keep them for the lockstep worker.
@@ -169,7 +170,7 @@ function onMessage(m) {
       break;
     case 'drop':
       if (state.worker) state.worker.postMessage(m);
-      toast(`${state.names.get(m.id) || 'A player'} left the game: their team no longer has a player.`);
+      toast(t('game.left', state.names.get(m.id)));
       break;
     case 'hash': if (state.worker) state.worker.postMessage(m); break;
     case 'chat': chatLine(m.name, m.text); break;
@@ -178,8 +179,11 @@ function onMessage(m) {
       if (!state.laneRtt) noteRtt(performance.now() - m.ts);
       break;
     case 'net': state.roomRtt = m.maxRtt; updateLead(); break;
-    case 'error':
-      if (!$('#lobby').hidden) lobbyError(m.message); else toast(m.message, 6000);
+    case 'error': {
+      // Known errors in the page's language, others as the server wrote them.
+      const text = m.code === 'not-found' ? t('err.notFound', m.room) : m.code === 'full' ? t('err.full') : m.message;
+      if (!$('#lobby').hidden) lobbyError(text); else toast(text, 6000);
+    }
       break;
     default:
   }
@@ -218,7 +222,7 @@ async function enter(action) {
 }
 const joinTyped = () => {
   const code = cleanCode($('#code').value);
-  if (code.length !== 4) { lobbyError('A room code is 4 letters long.'); $('#code').focus(); return; }
+  if (code.length !== 4) { lobbyError(t('err.code')); $('#code').focus(); return; }
   enter({ t: 'join', code });
 };
 $('#btn-create').onclick = () => enter({ t: 'create' });
@@ -256,9 +260,9 @@ async function refreshRooms() {
     const running = x.state === 'running';
     const sm = el('small');
     sm.append(el('span', `dot${running ? ' busy' : ''}`),
-      `${x.mode === 'solo' ? 'Solo' : 'Multiplayer'} · ${x.players} player${x.players > 1 ? 's' : ''} · ${running ? 'game in progress' : 'waiting'}`);
-    what.append(el('b', '', `${x.code} — ${x.host}’s room`), sm);
-    const btn = el('button', '', running ? 'Watch' : 'Join');
+      `${t(x.mode === 'solo' ? 'rooms.solo' : 'rooms.multi')} · ${t('rooms.players', x.players)} · ${t(running ? 'rooms.running' : 'rooms.waiting')}`);
+    what.append(el('b', '', t('rooms.whose', x.code, x.host)), sm);
+    const btn = el('button', '', t(running ? 'rooms.watch' : 'rooms.join'));
     btn.type = 'button';
     btn.onclick = () => enter({ t: 'join', code: x.code });
     li.append(what, btn);
@@ -296,9 +300,9 @@ function chosenAspect() {
 function pictureHint() {
   const a = aspectRatioText(chosenAspect()), q = quality();
   const [x, y] = a.split(':').map(Number);
-  $('#aspect').options[0].textContent = `Match my screen (${aspectRatioText(Math.max(4 / 3, Math.min(32 / 9, innerWidth / innerHeight)))})`;
-  $('#picture-hint').textContent = `Picture rendered at ${Math.round(240 * q * x / y)} × ${240 * q} pixels (${a}, ${q}×).` +
-    (q >= 3 && !gpuPicture() ? ' Without a graphics card the browser can use, prefer 1× or 2×.' : '');
+  $('#aspect').options[0].textContent = t('room.aspectAutoIs', aspectRatioText(Math.max(4 / 3, Math.min(32 / 9, innerWidth / innerHeight))));
+  $('#picture-hint').textContent = t('room.pictureHint', Math.round(240 * q * x / y), 240 * q, a, q) +
+    (q >= 3 && !gpuPicture() ? t('room.pictureNoGpu') : '');
 }
 addEventListener('resize', () => { if (!$('#room').hidden) pictureHint(); });
 
@@ -318,10 +322,7 @@ function onRoom(m) {
   const seated = m.members.filter((x) => x.seat >= 0);
   const players = seated.length;
   const hostName = (m.members.find((x) => x.id === m.host) || {}).name || '?';
-  $('#mode-line').textContent = isHost ? '' : (m.mode === 'solo'
-    ? 'Mode: Solo — the single-player campaign; the host plays, the others watch.'
-    : `Mode: Multiplayer — ${players} player team${players > 1 ? 's' : ''}` + ((m.cpus | 0) ? ` and ${m.cpus} computer team${m.cpus > 1 ? 's' : ''}` : '') +
-      '; each player sets up and controls their own team.');
+  $('#mode-line').textContent = isHost ? '' : (m.mode === 'solo' ? t('room.modeLineSolo') : t('room.modeLineMulti', players, m.cpus | 0));
   // Seats
   const seats = $('#seats');
   seats.textContent = '';
@@ -330,19 +331,19 @@ function onRoom(m) {
     const mine = who && who.id === state.id;
     const li = el('li', (who ? '' : 'empty') + (mine ? ' me' : ''));
     const label = el('span', 'who');
-    const name = el('b', '', who ? who.name : 'Free seat');
-    if (who && who.id === m.host) name.append(el('span', 'tag host', 'host'));
-    if (mine) name.append(el('span', 'tag', 'you'));
+    const name = el('b', '', who ? who.name : t('seat.free'));
+    if (who && who.id === m.host) name.append(el('span', 'tag host', t('seat.host')));
+    if (mine) name.append(el('span', 'tag', t('seat.you')));
     label.append(name);
     if (who && lobbyState && who.ready >= 0) {
-      label.append(el('small', who.ready >= 100 ? 'ready' : '', who.ready >= 100 ? 'Ready' : `Preloading ${who.ready}%`));
+      label.append(el('small', who.ready >= 100 ? 'ready' : '', who.ready >= 100 ? t('seat.ready') : t('seat.preloading', who.ready)));
       const prog = el('i', `prog${who.ready >= 100 ? ' full' : ''}`);
       prog.style.width = `${who.ready}%`;
       li.append(prog);
-    } else if (!who) label.append(el('small', '', lobbyState ? 'Waiting for a player' : ''));
-    li.append(el('span', 'badge', `P${s + 1}`), label);
+    } else if (!who) label.append(el('small', '', lobbyState ? t('seat.waiting') : ''));
+    li.append(el('span', 'badge', t('seat.badge', s + 1)), label);
     if (lobbyState && (!who || mine)) {
-      const b = el('button', mine ? 'link' : '', mine ? 'Watch only' : 'Take');
+      const b = el('button', mine ? 'link' : '', t(mine ? 'seat.watch' : 'seat.take'));
       b.type = 'button';
       b.onclick = () => sendWs({ t: 'seat', seat: mine ? -1 : s });
       li.append(b);
@@ -352,23 +353,23 @@ function onRoom(m) {
   $('#seat-count').textContent = `${players} / 4`;
   const watchers = m.members.filter((x) => x.seat < 0);
   $('#spectators').textContent = watchers.length
-    ? `Spectator${watchers.length > 1 ? 's' : ''}: ${watchers.map((x) => x.name + (x.id === state.id ? ' (you)' : '')).join(', ')}` : '';
+    ? t('room.spectators', watchers.length, watchers.map((x) => x.name + (x.id === state.id ? t('room.youSuffix') : '')).join(', ')) : '';
   // Start: the host's button, everyone else's waiting line.
   const late = seated.filter((x) => x.ready >= 0 && x.ready < 100);
   $('#btn-start').disabled = !players || !lobbyState;
-  $('#start-hint').textContent = !players ? 'At least one player must take a seat.'
-    : m.mode === 'solo' ? 'Solo: you play the campaign, the others watch.'
-      : (players + (m.cpus | 0) < 2 ? 'Only one team: add a computer team or invite a friend. '
-        : players + (m.cpus | 0) > 4 ? 'Four teams at most: the extra ones will be left out. ' : '') +
-        (late.length ? `${late.map((x) => `${x.name} (${x.ready}%)`).join(', ')} ${late.length > 1 ? 'are' : 'is'} still preloading: you can start, the rest will arrive during the game.`
-          : 'Everyone is ready.');
-  $('#room-wait').textContent = !lobbyState ? 'A game is in progress: you will play in the next one.'
-    : isHost ? '' : `Waiting for ${hostName} to start the game.`;
+  $('#start-hint').textContent = !players ? t('start.noPlayer')
+    : m.mode === 'solo' ? t('start.solo')
+      : (players + (m.cpus | 0) < 2 ? t('start.oneTeam')
+        : players + (m.cpus | 0) > 4 ? t('start.tooMany') : '') +
+        (late.length ? t('start.late', late.map((x) => `${x.name} (${x.ready}${getLang() === 'fr' ? ' %' : '%'})`), late.length)
+          : t('start.allReady'));
+  $('#room-wait').textContent = !lobbyState ? t('room.inProgress')
+    : isHost ? '' : t('room.waitHost', hostName);
   // Members panel (in game)
   const ul = $('#members');
   ul.textContent = '';
   for (const x of m.members) {
-    ul.append(el('li', '', `${x.seat >= 0 ? `Player ${x.seat + 1}` : 'Spectator'} — ${x.name}${x.id === m.host ? ' (host)' : ''}` +
+    ul.append(el('li', '', `${x.seat >= 0 ? t('member.player', x.seat + 1) : t('member.spectator')} — ${x.name}${x.id === m.host ? t('member.host') : ''}` +
       (x.rtt ? ` · ${x.rtt} ms` : '')));
   }
   if (!state.game) {
@@ -425,7 +426,7 @@ function reportProblem(kind, extra) {
   else sendWs({ t: 'diag', kind, d });
   if (!problemShown && !['resumed', 'picture-resumed', 'webgl-restored', 'picture-frozen', 'webgl-lost'].includes(kind)) {
     problemShown = true;
-    toast('The game stopped unexpectedly. The details were sent to the server.', 20000);
+    toast(t('game.problem'), 20000);
   }
 }
 addEventListener('error', (e) => { if (state.game) reportProblem('error', { msg: String(e.message).slice(0, 300), at: `${e.filename}:${e.lineno}` }); });
@@ -473,7 +474,7 @@ async function startGame(go) {
   try { go = await loadReplay(go); } catch (e) { console.warn('[replay]', e.message); }
   show('#play');
   $('#splash').hidden = false;
-  $('#splash-text').textContent = 'Starting the game…';
+  $('#splash-text').textContent = t('game.starting');
   state.session = go.session;
   state.players = go.players;
   let pre;
@@ -549,7 +550,7 @@ async function startGame(go) {
   state.game = Module;
   const s = document.createElement('script');
   s.src = `/game/Cochons_de_Guerre.js${pre.v}`;
-  s.onerror = () => { $('#splash-text').textContent = 'The game could not be loaded.'; };
+  s.onerror = () => { $('#splash-text').textContent = t('game.loadFailed'); };
   document.body.append(s);
 }
 
@@ -599,7 +600,7 @@ function onSnapshot(buf) {
   state.session = m.session;
   state.players = m.players;
   if (state.game && state.worker) {
-    toast(m.joined ? `${m.joined} joined the game: syncing…` : 'Syncing the game…');
+    toast(m.joined ? t('game.joined', m.joined) : t('game.syncing'));
     state.resyncBlob = buf;
     state.worker.postMessage({ t: 'resync', session: state.session, players: m.players, me: state.id, delay: m.delay, start: m.f, host: m.hostIndex | 0, dropped: m.dropped });
   } else {
@@ -612,7 +613,7 @@ function onSnapshot(buf) {
 // player joining a running game sees it once the snapshot is loaded.
 const MENU_PTR = 0x800858A4, HOME_SCREEN = { multi: 0x800E4BA0, solo: 0x800E47B0 };
 function revealWhenReady(Module, go) {
-  $('#splash-text').textContent = 'Preparing the game…';
+  $('#splash-text').textContent = t('game.preparing');
   const t0 = performance.now();
   const target = HOME_SCREEN[go.mode || 'multi'];
   const check = () => {
@@ -652,7 +653,7 @@ async function attach(Module, go) {
       state.resyncBlob = null;
     }
     else if (m.t === 'hashok') { state.hashOk = (state.hashOk || 0) + 1; state.lastHashOk = m.f; }
-    else if (m.t === 'desync') console.warn(`[lockstep] desync at frame ${m.f}`), state.desyncs = (state.desyncs || 0) + 1, toast(`Desync detected at frame ${m.f} with ${state.names.get(m.from) || 'a player'}.`, 10000);
+    else if (m.t === 'desync') console.warn(`[lockstep] desync at frame ${m.f}`), state.desyncs = (state.desyncs || 0) + 1, toast(t('game.desync', m.f, state.names.get(m.from)), 10000);
   };
   w.onerror = (e) => console.warn('[lockstep] worker error', e.message);
   w.postMessage({
@@ -699,13 +700,13 @@ async function attach(Module, go) {
       $('#canvas').addEventListener('webglcontextlost', (e) => { state.glLost = true; reportProblem('webgl-lost', {}); });
       $('#canvas').addEventListener('webglcontextrestored', () => { state.glLost = false; reportProblem('webgl-restored', {}); });
       state.display = new GpuDisplay($('#canvas'), Module, quality(), () => {
-        toast('The graphics card could not be used: reload the page with ?gpu=0.', 15000);
+        toast(t('game.noGpu'), 15000);
       });
     } else {
       const b0 = Module._psx_web_frame_buffer(0), b1 = Module._psx_web_frame_buffer(1);
       state.display = new Display($('#canvas'), memory, Module._psx_web_frame_header(), (i) => (i ? b1 : b0));
     }
-  } catch (e) { toast(`Cannot display the game: ${e.message}`, 10000); }
+  } catch (e) { toast(t('game.noDisplay', e.message), 10000); }
   revealWhenReady(Module, go);
   canvas_focus();
 }
@@ -729,13 +730,13 @@ function onStats(m) {
   // team: battle turn's team number; 0x100 | n while team n is being set up.
   const setup = m.team & 0x100, team = m.team & 0xff;
   $('#turn').textContent = setup
-    ? (mine ? `Set up your team (team ${team})` : `${holder || '?'} is setting up their team (team ${team})`)
+    ? (mine ? t('turn.setupMine', team) : t('turn.setup', holder || '?', team))
     : team
-      ? (mine ? `Your turn (team ${team})` : `${holder || '?'}’s turn (team ${team})`)
-      : (holder ? `${holder} is in control` : '');
+      ? (mine ? t('turn.mine', team) : t('turn.other', holder || '?', team))
+      : (holder ? t('turn.control', holder) : '');
   $('#turn').classList.toggle('mine', !!(team && mine));
-  const waiting = m.waiting.length ? ` · waiting for ${m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')}` : '';
-  $('#stats').textContent = `frame ${m.frame}${speed.fps ? ` · ${Math.round(speed.fps)} fps` : ''}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;
+  const waiting = m.waiting.length ? t('stats.waiting', m.waiting.map((i) => state.names.get(state.players[i]) || '?').join(', ')) : '';
+  $('#stats').textContent = `${t('stats.frame', m.frame)}${speed.fps ? t('stats.fps', Math.round(speed.fps)) : ''}${state.rtt ? ` · ${Math.round(state.rtt)} ms` : ''}${waiting}`;
 }
 
 // Every half minute of game, what this player's machine achieved goes to the
@@ -814,12 +815,12 @@ $('#btn-panel-close').onclick = () => { $('#panel').hidden = true; $('#canvas').
 function chatLine(name, text) {
   for (const log of [$('#chat-log'), $('#room-chat-log')]) {
     const d = el('div');
-    d.append(el('b', '', `${name}: `), document.createTextNode(text));
+    d.append(el('b', '', t('chat.line', name)), document.createTextNode(text));
     log.append(d);
     while (log.childElementCount > 200) log.firstElementChild.remove();
     log.scrollTop = 1e9;
   }
-  if (state.game && $('#panel').hidden) toast(`${name}: ${text}`);
+  if (state.game && $('#panel').hidden) toast(`${t('chat.line', name)}${text}`);
 }
 function chatForm(form, field, after) {
   $(form).onsubmit = (e) => {
@@ -827,7 +828,7 @@ function chatForm(form, field, after) {
     const text = $(field).value.trim();
     if (!text) return;
     sendWs({ t: 'chat', text });
-    chatLine('Me', text);
+    chatLine(t('chat.me'), text);
     $(field).value = '';
     after();
   };
@@ -841,20 +842,37 @@ $('#btn-keys-reset').onclick = () => { input.reset(); renderKeys(); };
 function renderKeys() {
   const tb = $('#keymap');
   tb.textContent = '';
-  for (const [a, label] of ACTIONS) {
+  for (const a of ACTIONS) {
     const tr = document.createElement('tr');
     const td1 = document.createElement('td');
-    td1.textContent = label;
+    td1.textContent = actionLabel(a);
     const td2 = document.createElement('td');
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = (input.keys[a] || []).map(keyLabel).join(' / ') || '—';
-    b.onclick = () => { b.textContent = 'Press a key…'; input.capture = (code) => { input.setKey(a, code); renderKeys(); }; };
+    b.onclick = () => { b.textContent = t('keys.press'); input.capture = (code) => { input.setKey(a, code); renderKeys(); }; };
     td2.append(b);
     tr.append(td1, td2);
     tb.append(tr);
   }
 }
+
+// ------------------------------------------------------------------ language
+// The page's own text in the player's language (i18n.js); the game stays the
+// French release. Everything written by this file is drawn again on a change.
+function keyHelp() { for (const k of document.querySelectorAll('kbd[data-key]')) k.textContent = keyLabel(k.dataset.key); }
+layoutReady.then(keyHelp);
+keyHelp();
+for (const sel of document.querySelectorAll('select.lang')) sel.onchange = () => setLang(sel.value);
+onLangChange(() => {
+  if (invited.length === 4) $('#btn-invite-join').textContent = t('invite.joinCode', invited);
+  keyHelp();
+  showLoad();
+  roomsShown = ''; refreshRooms();
+  if (state.room) onRoom(state.room);
+  if ($('#dlg-keys').open) renderKeys();
+});
+if (invited.length === 4) $('#btn-invite-join').textContent = t('invite.joinCode', invited);
 
 // Test hooks (automated end-to-end tests)
 window.__cdg = { state, input, peek: (a) => (state.game && state.game._psx_web_peek32 ? state.game._psx_web_peek32(a) >>> 0 : 0) };

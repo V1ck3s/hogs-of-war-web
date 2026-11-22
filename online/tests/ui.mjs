@@ -23,9 +23,14 @@ const b = await puppeteer.launch({
   args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage'],
 });
 const BASE = `http://127.0.0.1:${PORT}/`;
-// Each player has their own browser profile (own saved name and choices).
-async function open(url, w = 1280, h = 860) {
+// Each player has their own browser profile (own saved name and choices),
+// with an English browser unless told otherwise (the page follows it).
+async function open(url, w = 1280, h = 860, langs = ['en-US', 'en']) {
   const page = await (await b.createBrowserContext()).newPage();
+  await page.evaluateOnNewDocument((l) => {
+    Object.defineProperty(navigator, 'languages', { get: () => l });
+    Object.defineProperty(navigator, 'language', { get: () => l[0] });
+  }, langs);
   await page.setViewport({ width: w, height: h });
   page.on('pageerror', (e) => { console.log('[page error]', e.message); failures++; });
   // ?prefetch=0: these screens are checked without downloading the disc.
@@ -45,6 +50,20 @@ check(/ready to play/.test(await text(a, '#preload')), `preload announced: "${aw
 check(await a.$eval('#preload-bar', (e) => e.parentElement.classList.contains('done')), 'preload bar full');
 check(!(await shown(a, '#invite')) && !(await shown(a, '#lobby-error')), 'home page with no invitation and no error');
 await shot(a, '1_home.png');
+
+// ---- language: the browser's by default, then the player's choice (kept).
+const f = await open(BASE, 1280, 860, ['fr-FR', 'fr']);
+await f.waitForFunction(() => /prêt à jouer/.test(document.querySelector('#preload').textContent), { timeout: 180000 });
+check((await f.$eval('html', (e) => e.lang)) === 'fr' && /Créer un salon/.test(await text(f, '#btn-create')),
+  `a French browser gets the page in French: "${await text(f, '#btn-create')}"`);
+await shot(f, '1_home_fr.png');
+await f.select('#lobby select.lang', 'en');
+check(/Create a room/.test(await text(f, '#btn-create')) && /ready to play/.test(await text(f, '#preload')),
+  'switching to English redraws the page');
+await f.reload();
+await f.waitForFunction(() => /Create a room/.test(document.querySelector('#btn-create').textContent), { timeout: 10000 });
+check((await f.$eval('#lobby select.lang', (e) => e.value)) === 'en', 'the choice is kept on the next visit');
+await f.close();
 
 // A wrong code is answered on the page itself.
 await a.type('#name', 'Alice');
@@ -69,6 +88,11 @@ check(/×/.test(await text(a, '#picture-hint')), `picture announced: "${await te
 await a.select('#aspect', '32:9'); await a.select('#quality', '4');
 check(/3413 × 960/.test(await text(a, '#picture-hint')), `32:9 at 4×: "${await text(a, '#picture-hint')}"`);
 await shot(a, '3_room_host.png');
+await a.select('#room select.lang', 'fr');
+check(/hôte/.test(await text(a, '#seats li.me')) && /Lancer la partie/.test(await text(a, '#btn-start'))
+  && /Image calculée/.test(await text(a, '#picture-hint')), `the room page switches to French: "${await text(a, '#start-hint')}"`);
+await shot(a, '3_room_host_fr.png');
+await a.select('#room select.lang', 'en');
 
 // The room is listed on the home page of someone else.
 const c = await open(BASE);

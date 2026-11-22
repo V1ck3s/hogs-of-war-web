@@ -447,8 +447,8 @@ function onJson(c, m) {
     case 'join': {
       const code = String(m.code || '').toUpperCase().trim();
       const nr = rooms.get(code);
-      if (!nr) { send(c, { t: 'error', message: `Room ${code} not found.` }); return; }
-      if (nr.members.length >= MAX_ROOM) { send(c, { t: 'error', message: 'Room is full.' }); return; }
+      if (!nr) { send(c, { t: 'error', code: 'not-found', room: code, message: `Room ${code} not found.` }); return; }
+      if (nr.members.length >= MAX_ROOM) { send(c, { t: 'error', code: 'full', message: 'Room is full.' }); return; }
       if (r) leaveRoom(c);
       nr.members.push(c.id);
       c.room = code;

@@ -1,16 +1,14 @@
 // Keyboard + gamepad → PS1 pad mask (active-high, PS1 bit order).
+import { t, has, getLang } from './i18n.js';
 export const BIT = {
   select: 0, l3: 1, r3: 2, start: 3, up: 4, right: 5, down: 6, left: 7,
   l2: 8, r2: 9, l1: 10, r1: 11, triangle: 12, circle: 13, cross: 14, square: 15,
 };
 
-// Labels follow the game's own "CONFIGURATION MANETTE" screen.
-export const ACTIONS = [
-  ['up', 'Up (move / aim)'], ['down', 'Down (move / aim)'], ['left', 'Left (move / aim)'], ['right', 'Right (move / aim)'],
-  ['cross', 'Action / fire (✕)'], ['circle', 'Weapons menu (○)'], ['square', 'Jump (□)'], ['triangle', 'Cancel (△)'],
-  ['l1', 'Camera (L1)'], ['l2', 'Camera (L2)'], ['r1', 'Aim — up (R1)'], ['r2', 'Aim — down (R2)'],
-  ['start', 'Pause (Start)'], ['select', 'Select'],
-];
+// Labels (i18n.js, act.*) follow the game's own "CONFIGURATION MANETTE" screen.
+export const ACTIONS = ['up', 'down', 'left', 'right', 'cross', 'circle', 'square', 'triangle',
+  'l1', 'l2', 'r1', 'r2', 'start', 'select'];
+export const actionLabel = (a) => t(`act.${a}`);
 
 // PC layout, by physical key position (event.code), so it is ZQSD on an
 // AZERTY keyboard and WASD on a QWERTY one: move with the left hand, act with
@@ -81,8 +79,8 @@ export class Input {
 }
 
 // Letters as printed on the player's own keyboard (Z, Q on AZERTY) when the
-// browser can tell (Chrome, Edge); otherwise the AZERTY reading of the code,
-// this being a French game.
+// browser can tell (Chrome, Edge); otherwise the AZERTY reading of the code
+// for a French page, the QWERTY one for an English page.
 const AZERTY = { KeyQ: 'A', KeyW: 'Z', KeyA: 'Q', KeyZ: 'W', KeyM: ',', Semicolon: 'M' };
 let layout = null;
 export const layoutReady = (navigator.keyboard && navigator.keyboard.getLayoutMap
@@ -90,14 +88,12 @@ export const layoutReady = (navigator.keyboard && navigator.keyboard.getLayoutMa
 
 export function keyLabel(code) {
   if (!code) return '—';
-  const named = {
-    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Enter', NumpadEnter: 'Enter (keypad)', Space: 'Space',
-    Escape: 'Esc', Tab: 'Tab', Backspace: 'Backspace', ShiftLeft: 'Left Shift', ShiftRight: 'Right Shift', ControlLeft: 'Left Ctrl', ControlRight: 'Right Ctrl',
-  };
-  if (named[code]) return named[code];
+  const arrows = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+  if (arrows[code]) return arrows[code];
+  if (has(`key.${code}`)) return t(`key.${code}`);
   const l = layout && layout.get(code);
   if (l) return l.toUpperCase();
-  if (AZERTY[code]) return AZERTY[code];
+  if (getLang() === 'fr' && AZERTY[code]) return AZERTY[code];
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
   return code;

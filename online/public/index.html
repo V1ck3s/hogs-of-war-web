@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Cochons de Guerre — online</title>
-  <meta name="description" content="Cochons de Guerre (2000), the French release, recompiled to WebAssembly: every player runs the game in their own browser, online multiplayer.">
+  <meta name="description" data-i18n-content="meta.description" content="Cochons de Guerre (2000), the French release, recompiled to WebAssembly: every player runs the game in their own browser, online multiplayer.">
   <meta name="theme-color" content="#17120d">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
   <link rel="modulepreload" href="js/app.js">
+  <link rel="modulepreload" href="js/i18n.js">
   <link rel="modulepreload" href="js/input.js">
   <link rel="modulepreload" href="js/display.js">
 </head>
@@ -18,43 +19,44 @@
     <header class="masthead">
       <img src="favicon.svg" alt="" width="64" height="64">
       <div>
-        <h1>Cochons de Guerre <small>online</small></h1>
-        <p class="lead">The 2000 game runs in your browser: nothing to install, no disc needed.
+        <h1>Cochons de Guerre <small data-i18n="home.online">online</small></h1>
+        <p class="lead" data-i18n="home.lead">The 2000 game runs in your browser: nothing to install, no disc needed.
           Up to 4 players, each on their own screen.</p>
       </div>
+      <label class="langpick"><select class="lang" aria-label="Language" data-i18n-aria-label="lang.label"><option value="en">English</option><option value="fr">Français</option></select></label>
     </header>
 
     <p id="lobby-error" class="notice error" role="alert" hidden></p>
 
     <div id="invite" class="notice invite" hidden>
       <div>
-        <strong>You are invited to room <b id="invite-code" class="code"></b></strong>
-        <span class="muted">Choose your name, then join your friends.</span>
+        <strong><span data-i18n="invite.title">You are invited to room</span> <b id="invite-code" class="code"></b></strong>
+        <span class="muted" data-i18n="invite.sub">Choose your name, then join your friends.</span>
       </div>
-      <button id="btn-invite-join" class="primary" type="button">Join the room</button>
+      <button id="btn-invite-join" class="primary" type="button" data-i18n="invite.join">Join the room</button>
     </div>
 
     <div class="card identity">
-      <label for="name">Your player name</label>
-      <input id="name" maxlength="24" placeholder="Hog" autocomplete="nickname" spellcheck="false" enterkeyhint="go">
+      <label for="name" data-i18n="name.label">Your player name</label>
+      <input id="name" maxlength="24" placeholder="Hog" data-i18n-placeholder="name.default" autocomplete="nickname" spellcheck="false" enterkeyhint="go">
     </div>
 
     <div class="row">
       <div class="card col">
-        <h2>New game</h2>
-        <p class="muted">Open a room, then send the invitation link to your friends.</p>
-        <button id="btn-create" class="primary big" type="button">Create a room</button>
+        <h2 data-i18n="new.title">New game</h2>
+        <p class="muted" data-i18n="new.text">Open a room, then send the invitation link to your friends.</p>
+        <button id="btn-create" class="primary big" type="button" data-i18n="new.create">Create a room</button>
       </div>
       <div class="card col">
-        <h2>Join friends</h2>
-        <label for="code" class="muted">Room code — 4 letters from the host</label>
+        <h2 data-i18n="join.title">Join friends</h2>
+        <label for="code" class="muted" data-i18n="join.codeLabel">Room code — 4 letters from the host</label>
         <div class="join">
           <input id="code" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off"
             spellcheck="false" inputmode="text" enterkeyhint="go" aria-describedby="code-help">
-          <button id="btn-join" type="button">Join</button>
+          <button id="btn-join" type="button" data-i18n="join.button">Join</button>
         </div>
-        <h3 id="code-help">Open rooms</h3>
-        <ul id="room-list" class="room-list" aria-live="polite"></ul>
+        <h3 id="code-help" data-i18n="join.open">Open rooms</h3>
+        <ul id="room-list" class="room-list" data-i18n-empty="join.none" aria-live="polite"></ul>
       </div>
     </div>
 
@@ -64,25 +66,25 @@
     </div>
 
     <details class="card help">
-      <summary>Keyboard and gamepad controls</summary>
+      <summary data-i18n="help.title">Keyboard and gamepad controls</summary>
       <dl class="keys">
-        <div><dt><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></dt><dd>Move, aim</dd></div>
-        <div><dt><kbd>Space</kbd></dt><dd>Confirm, fire (Cross)</dd></div>
-        <div><dt><kbd>Backspace</kbd></dt><dd>Weapons menu, back (Circle)</dd></div>
-        <div><dt><kbd>F</kbd></dt><dd>Jump (Square)</dd></div>
-        <div><dt><kbd>R</kbd></dt><dd>Cancel (Triangle)</dd></div>
-        <div><dt><kbd>A</kbd> <kbd>W</kbd></dt><dd>Camera (L1, L2)</dd></div>
-        <div><dt><kbd>E</kbd> <kbd>C</kbd></dt><dd>Aim higher, lower (R1, R2)</dd></div>
-        <div><dt><kbd>Enter</kbd> or <kbd>Esc</kbd></dt><dd>Pause (Start)</dd></div>
-        <div><dt><kbd>F1</kbd></dt><dd>Room panel</dd></div>
-        <div><dt><kbd>T</kbd></dt><dd>Chat</dd></div>
-        <div><dt><kbd>F11</kbd></dt><dd>Fullscreen</dd></div>
+        <div><dt><kbd data-key="KeyW"></kbd><kbd data-key="KeyA"></kbd><kbd data-key="KeyS"></kbd><kbd data-key="KeyD"></kbd> <span data-i18n="help.or">or</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></dt><dd data-i18n="help.move">Move, aim</dd></div>
+        <div><dt><kbd data-key="Space"></kbd></dt><dd data-i18n="help.cross">Confirm, fire (Cross)</dd></div>
+        <div><dt><kbd data-key="Backspace"></kbd></dt><dd data-i18n="help.circle">Weapons menu, back (Circle)</dd></div>
+        <div><dt><kbd data-key="KeyF"></kbd></dt><dd data-i18n="help.square">Jump (Square)</dd></div>
+        <div><dt><kbd data-key="KeyR"></kbd></dt><dd data-i18n="help.triangle">Cancel (Triangle)</dd></div>
+        <div><dt><kbd data-key="KeyQ"></kbd> <kbd data-key="KeyZ"></kbd></dt><dd data-i18n="help.camera">Camera (L1, L2)</dd></div>
+        <div><dt><kbd data-key="KeyE"></kbd> <kbd data-key="KeyC"></kbd></dt><dd data-i18n="help.aim">Aim higher, lower (R1, R2)</dd></div>
+        <div><dt><kbd data-key="Enter"></kbd> <span data-i18n="help.or">or</span> <kbd data-key="Escape"></kbd></dt><dd data-i18n="help.pause">Pause (Start)</dd></div>
+        <div><dt><kbd>F1</kbd></dt><dd data-i18n="help.panel">Room panel</dd></div>
+        <div><dt><kbd>T</kbd></dt><dd data-i18n="help.chat">Chat</dd></div>
+        <div><dt><kbd>F11</kbd></dt><dd data-i18n="help.full">Fullscreen</dd></div>
       </dl>
-      <p class="muted small">Keys can be changed in the room panel during the game. Gamepads are detected
+      <p class="muted small" data-i18n="help.note">Keys can be changed in the room panel during the game. Gamepads are detected
         as soon as a button is pressed.</p>
     </details>
 
-    <footer>Unofficial, non-commercial fan project. <i>Hogs of War / Cochons de Guerre</i> © their respective rights holders.
+    <footer><span data-i18n-html="footer">Unofficial, non-commercial fan project. <i>Hogs of War / Cochons de Guerre</i> © their respective rights holders.</span>
       <span id="build" class="build"></span></footer>
   </section>
 
@@ -90,62 +92,63 @@
   <section id="room" class="page" hidden>
     <header class="roomhead">
       <div>
-        <p class="eyebrow">Room</p>
+        <p class="eyebrow" data-i18n="room.eyebrow">Room</p>
         <h1><b id="room-code2" class="code"></b></h1>
       </div>
       <div class="roomhead-actions">
-        <button id="btn-copy2" type="button" class="primary">Copy invitation link</button>
-        <button id="btn-leave2" type="button" class="danger">Leave</button>
+        <label class="langpick"><select class="lang" aria-label="Language" data-i18n-aria-label="lang.label"><option value="en">English</option><option value="fr">Français</option></select></label>
+        <button id="btn-copy2" type="button" class="primary" data-i18n="room.copy">Copy invitation link</button>
+        <button id="btn-leave2" type="button" class="danger" data-i18n="room.leave">Leave</button>
       </div>
     </header>
     <p id="room-banner" class="notice" hidden></p>
 
     <div class="room-grid">
       <div class="card">
-        <h2>Players <span id="seat-count" class="count"></span></h2>
+        <h2><span data-i18n="room.players">Players</span> <span id="seat-count" class="count"></span></h2>
         <ol id="seats" class="seats"></ol>
         <p id="spectators" class="muted small"></p>
         <p id="mode-line" class="muted small"></p>
 
-        <h2 class="spaced">Chat</h2>
-        <div id="room-chat-log" class="chat" aria-live="polite"></div>
+        <h2 class="spaced" data-i18n="room.chat">Chat</h2>
+        <div id="room-chat-log" class="chat" data-i18n-empty="room.noChat" aria-live="polite"></div>
         <form id="room-chat-form" class="chat-form">
-          <input id="room-chat-input" maxlength="300" placeholder="Write to the other players…" aria-label="Message" autocomplete="off">
-          <button>Send</button>
+          <input id="room-chat-input" maxlength="300" placeholder="Write to the other players…" data-i18n-placeholder="room.chatPlaceholder" aria-label="Message" autocomplete="off">
+          <button data-i18n="room.send">Send</button>
         </form>
       </div>
 
       <div class="card">
         <div class="host-only">
-          <h2>Game</h2>
-          <label for="mode">Game mode</label>
+          <h2 data-i18n="room.game">Game</h2>
+          <label for="mode" data-i18n="room.mode">Game mode</label>
           <select id="mode">
-            <option value="multi" selected>Multiplayer — players against each other</option>
-            <option value="solo">Solo — the campaign (the host plays, the others watch)</option>
+            <option value="multi" selected data-i18n="room.modeMulti">Multiplayer — players against each other</option>
+            <option value="solo" data-i18n="room.modeSolo">Solo — the campaign (the host plays, the others watch)</option>
           </select>
           <div id="cpus-label">
-            <label for="cpus">Computer teams, in addition to the players</label>
+            <label for="cpus" data-i18n="room.cpus">Computer teams, in addition to the players</label>
             <select id="cpus">
-              <option value="0">None</option><option value="1" selected>1</option>
+              <option value="0" data-i18n="room.cpusNone">None</option><option value="1" selected>1</option>
               <option value="2">2</option><option value="3">3</option>
             </select>
           </div>
         </div>
 
-        <h2 class="spaced-host">Your picture</h2>
-        <p class="muted small">Each player chooses for themselves: it changes nothing for the others.</p>
-        <label for="aspect">Aspect ratio</label>
+        <h2 class="spaced-host" data-i18n="room.picture">Your picture</h2>
+        <p class="muted small" data-i18n="room.pictureNote">Each player chooses for themselves: it changes nothing for the others.</p>
+        <label for="aspect" data-i18n="room.aspect">Aspect ratio</label>
         <select id="aspect">
           <option value="auto" selected>Match my screen</option>
           <option value="4:3">4:3</option><option value="16:9">16:9</option><option value="16:10">16:10</option>
           <option value="21:9">21:9</option><option value="32:9">32:9</option>
         </select>
-        <label for="quality">Quality</label>
+        <label for="quality" data-i18n="room.quality">Quality</label>
         <select id="quality">
-          <option value="1">1× — original resolution (modest PCs)</option>
-          <option value="2" selected>2× — sharp</option>
-          <option value="3">3× — very sharp</option>
-          <option value="4">4× — maximum (powerful PC)</option>
+          <option value="1" data-i18n="room.q1">1× — original resolution (modest PCs)</option>
+          <option value="2" selected data-i18n="room.q2">2× — sharp</option>
+          <option value="3" data-i18n="room.q3">3× — very sharp</option>
+          <option value="4" data-i18n="room.q4">4× — maximum (powerful PC)</option>
         </select>
         <p id="picture-hint" class="muted small"></p>
 
@@ -155,7 +158,7 @@
         </div>
 
         <div class="launch">
-          <button id="btn-start" class="primary big host-only" type="button">Start the game</button>
+          <button id="btn-start" class="primary big host-only" type="button" data-i18n="room.start">Start the game</button>
           <p id="start-hint" class="muted small host-only"></p>
           <p id="room-wait" class="waitline"></p>
         </div>
@@ -165,30 +168,30 @@
 
   <!-- =============================================================== game -->
   <section id="play" hidden>
-    <canvas id="canvas" aria-label="Game picture" tabindex="-1"></canvas>
+    <canvas id="canvas" aria-label="Game picture" data-i18n-aria-label="game.picture" tabindex="-1"></canvas>
     <canvas id="sdl" hidden></canvas>
-    <div id="splash"><div class="spinner" aria-hidden="true"></div><p id="splash-text">Loading the game…</p></div>
+    <div id="splash"><div class="spinner" aria-hidden="true"></div><p id="splash-text" data-i18n="game.loading">Loading the game…</p></div>
     <div id="hud">
-      <span class="pill">Room <b id="room-code"></b></span>
+      <span class="pill"><span data-i18n="panel.room">Room</span> <b id="room-code"></b></span>
       <span class="pill" id="turn"></span>
       <span class="pill muted" id="stats"></span>
-      <button id="btn-panel" class="pill" title="F1">☰ Room</button>
+      <button id="btn-panel" class="pill" title="F1" data-i18n="panel.roomButton">☰ Room</button>
     </div>
     <aside id="panel" hidden>
-      <div class="panel-head"><h2>Room</h2><button id="btn-panel-close" title="Close (F1)">✕ Close</button></div>
-      <p><button id="btn-copy">Copy invitation link</button></p>
+      <div class="panel-head"><h2 data-i18n="panel.room">Room</h2><button id="btn-panel-close" title="Close (F1)" data-i18n-title="panel.closeTitle" data-i18n="panel.close">✕ Close</button></div>
+      <p><button id="btn-copy" data-i18n="room.copy">Copy invitation link</button></p>
       <ul id="members"></ul>
-      <label>Volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <label><span data-i18n="panel.volume">Volume</span> <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
       <div class="buttons">
-        <button id="btn-keys">Keys</button>
-        <button id="btn-full">Fullscreen</button>
-        <button id="btn-end" class="host-only">End game</button>
-        <button id="btn-leave" class="danger">Leave</button>
+        <button id="btn-keys" data-i18n="panel.keys">Keys</button>
+        <button id="btn-full" data-i18n="panel.full">Fullscreen</button>
+        <button id="btn-end" class="host-only" data-i18n="panel.end">End game</button>
+        <button id="btn-leave" class="danger" data-i18n="room.leave">Leave</button>
       </div>
-      <div id="chat-log" class="chat" aria-live="polite"></div>
+      <div id="chat-log" class="chat" data-i18n-empty="room.noChat" aria-live="polite"></div>
       <form id="chat-form" class="chat-form">
-        <input id="chat-input" maxlength="300" placeholder="Message (T)" aria-label="Message" autocomplete="off">
-        <button>Send</button>
+        <input id="chat-input" maxlength="300" placeholder="Message (T)" data-i18n-placeholder="panel.chatPlaceholder" aria-label="Message" autocomplete="off">
+        <button data-i18n="room.send">Send</button>
       </form>
     </aside>
   </section>
@@ -197,11 +200,11 @@
 
   <dialog id="dlg-keys">
     <form method="dialog">
-      <h2>Keyboard keys</h2>
+      <h2 data-i18n="keys.title">Keyboard keys</h2>
       <table><tbody id="keymap"></tbody></table>
       <div class="dlg-actions">
-        <button type="button" id="btn-keys-reset">Defaults</button>
-        <button class="primary">Close</button>
+        <button type="button" id="btn-keys-reset" data-i18n="keys.defaults">Defaults</button>
+        <button class="primary" data-i18n="keys.close">Close</button>
       </div>
     </form>
   </dialog>
