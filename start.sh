@@ -113,8 +113,12 @@ if ! have emcc; then
             "$EMSDK/emsdk" activate "$EMSDK_VERSION" >/dev/null
         fi
     fi
+    # emsdk_env.sh clears EM_CACHE: keep the caller's (the Docker image puts
+    # Emscripten's build cache in its volume).
+    em_cache=${EM_CACHE:-}
     # shellcheck disable=SC1091
     EMSDK_QUIET=1 source "$EMSDK/emsdk_env.sh"
+    [ -z "$em_cache" ] || export EM_CACHE=$em_cache
 fi
 
 # ---------------------------------------------------------------- game code
