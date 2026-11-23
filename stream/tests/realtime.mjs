@@ -31,9 +31,10 @@ let failures = 0;
 const check = (c, m) => { console.log((c ? 'OK   ' : 'FAIL ') + m); if (!c) failures++; };
 // Players normally run on their own machines: keep the two test browsers at
 // the lowest CPU priority so they do not steal the server's time.
-fs.writeFileSync(path.join(os.tmpdir(), 'chromium-nice.sh'), '#!/bin/sh\nexec chrt --idle 0 /usr/bin/chromium "$@"\n', { mode: 0o755 });
+const niceChrome = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'realtime-')), 'chromium-nice.sh');
+fs.writeFileSync(niceChrome, '#!/bin/sh\nexec chrt --idle 0 /usr/bin/chromium "$@"\n', { mode: 0o755 });
 const browser = await puppeteer.launch({
-  executablePath: path.join(os.tmpdir(), 'chromium-nice.sh'), headless: true, protocolTimeout: 900000,
+  executablePath: niceChrome, headless: true, protocolTimeout: 900000,
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage'],
 });
 const host = await browser.newPage();
