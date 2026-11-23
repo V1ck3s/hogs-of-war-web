@@ -160,6 +160,14 @@ if [ ! -f "$BUILD/build.ninja" ] || [ "$MARKER" -nt "$BUILD/build.ninja" ]; then
     grep -E '^(capture units|building the capture)|CMake Warning.*capture' "$ROOT/.cache/configure-web.log" || true
 fi
 
+# Emscripten installs the SDL2 port (headers included) on first use, in the
+# middle of the build: the headers would then be newer than objects already
+# compiled and the next start would rebuild and relink. Install it first.
+if [ ! -f "$(em-config CACHE)/sysroot/lib/wasm32-emscripten/libSDL2-mt.a" ]; then
+    say "Building the SDL2 library for Emscripten"
+    embuilder build sdl2-mt
+fi
+
 say "Building the game ($CDG_JOBS jobs; 20 to 60 minutes the first time)"
 cmake --build "$BUILD" -j "$CDG_JOBS"
 
