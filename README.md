@@ -11,8 +11,100 @@ PlayStation AI and the French text, voices and sounds are those of the disc.
 The server sends the disc to the browsers and relays the players' inputs; the
 players run in lockstep, so every browser computes exactly the same game.
 
-On top of the original game: wide displays from 4:3 to 32:9 (each player has
-their own screen shape), instant loading and a faster enemy AI.
+## Features
+
+### Playing online
+
+- **Nothing to install for the players**: the game runs in the browser
+  (WebAssembly). Only the person hosting the server needs the disc; the
+  browsers receive it from the server, compressed, and can start before the
+  preload is over.
+- **Up to 4 teams in a battle**: up to 4 players, each on their own screen,
+  and up to 3 computer teams.
+- **Two game modes**:
+  - **Multiplayer**: the players fight each other;
+  - **Solo**: the campaign; the host plays and the others watch.
+- **Rooms** with a 4-letter code and an **invitation link**, a list of open
+  rooms, a chat, and a **"watch only"** seat for spectators.
+- **Rejoin a running game**: a player who drops out comes back to their seat.
+  Everyone else's copy of the game reloads the same snapshot and the battle
+  goes on.
+- **Real turn ownership**: each player sets up their own team and controls it
+  only during their own turns; the others watch it live.
+- **Lockstep**: every browser computes exactly the same game. The input delay
+  follows the measured latency, and a slower machine never freezes the others
+  for long.
+- **Keyboard and gamepad**:
+  - keys can be changed during the game;
+  - key names follow the player's keyboard layout (QWERTY, AZERTY…);
+  - gamepads are detected as soon as a button is pressed.
+- **Web page in English or French**, following the browser's language, with a
+  selector.
+- Crash and stall reports are sent to the server log.
+
+### Picture
+
+Each player picks their own picture: it changes nothing for the others and
+does not break the lockstep.
+
+- **Aspect ratios**:
+  - **Match my screen**: follows the window, anywhere from 4:3 to 32:9;
+  - **4:3**, as on the PlayStation;
+  - **16:10**;
+  - **16:9**;
+  - **21:9** (ultrawide);
+  - **32:9** (super ultrawide, e.g. 5120 × 1440).
+- **True widescreen**, not stretched: the 3D world is drawn wider.
+  - Pigs, props and terrain appear in the extra side areas, and the sky
+    backdrops are widened to fill them.
+  - The sniper rifle and machine gun scopes keep their round view, with bars
+    on both sides.
+  - The full-motion videos and boot logos stay in 4:3.
+- **Internal resolution from 1× to 4×**:
+  - 1×: the PlayStation's own resolution (240 lines);
+  - 2×: sharp;
+  - 3×: very sharp;
+  - 4×: for a powerful PC.
+- Fullscreen.
+
+### Changes to the game itself
+
+- **Direct start**: the game boots straight into the mode chosen in the room
+  ("Multijoueur" level selection, or the campaign). No logos, title or main
+  menu.
+- **Instant loading**: data files are copied straight into memory instead of
+  going through the emulated CD drive. Speech, music and videos still stream
+  as on the PlayStation.
+- **Faster enemy AI**: the routine the computer teams use to judge every move
+  and target ran for hundreds of milliseconds of emulated time per decision,
+  freezing the picture. It now runs natively, with identical results, so the
+  AI decides within the same frame.
+- **Smooth scope aiming**: aiming through a scope no longer runs at half
+  speed.
+
+Everything else (gameplay, AI decisions, French text, voices and music) is the
+original game, from the disc.
+
+## Screenshots
+
+A battle in 16:9: the hills, the backdrop and the sky reach the edges of the
+screen.
+
+![Battle in 16:9](docs/screenshots/battle-16x9.jpg)
+
+Other battles in 32:9 (super ultrawide), 21:9 (ultrawide) and 4:3 (as on the
+PlayStation):
+
+![Battle in 32:9](docs/screenshots/battle-32x9.jpg)
+
+![Battle in 21:9](docs/screenshots/battle-21x9.jpg)
+
+<img src="docs/screenshots/battle-4x3.jpg" alt="Battle in 4:3" width="640">
+
+The home page and a room, where each player picks their aspect ratio and
+quality:
+
+<img src="docs/screenshots/home.jpg" alt="Home page" width="49%"> <img src="docs/screenshots/room.jpg" alt="Room" width="49%">
 
 ## Getting started
 
@@ -101,7 +193,8 @@ committed.
 This repository contains no game data: no disc image, no executable code and
 no assets of the original game, and no PlayStation BIOS (the open-source
 OpenBIOS bundled with psxrecomp is used). The translated code is produced on
-your machine from your own disc.
+your machine from your own disc. The screenshots in `docs/screenshots/` show
+the game running in this project.
 
 *Hogs of War* and *Cochons de Guerre* are trademarks of their respective
 owners; PlayStation is a trademark of Sony Interactive Entertainment. This is
