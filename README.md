@@ -78,10 +78,9 @@ deletes it.
 
 The image is built by GitHub Actions on every push to `main` and published
 with this repository's packages as `ghcr.io/v1ck3s/hogs-of-war-web` (`latest`,
-`sha-<commit>`, and `1.2.3` for a `v1.2.3` tag). It contains no game data. While
-the repository is private, log in first (`docker login ghcr.io`, with a token
-allowed to read packages), or build the image yourself from a clone:
-`git clone --recurse-submodules …`, then `docker compose up -d --build`.
+`sha-<commit>`, and `1.2.3` for a `v1.2.3` tag). It contains no game data. To
+build the image yourself instead, clone the repository with
+`git clone --recurse-submodules` and run `docker compose up -d --build`.
 
 ## Repository layout
 
