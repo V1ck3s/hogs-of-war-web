@@ -741,8 +741,10 @@ static void bd_sync(void) {
     int on = 0, pct = g_ws_bd_stretch_pct;
     if (g_ws_bd_stretch_on) on = psx_ws_prim_in_backdrop() ? 1 : 0;
     if (on != s_bd_sent_on || pct != s_bd_sent_pct) {
-        s_bd_sent_on = on; s_bd_sent_pct = pct;
+        /* Recorded first: a resync started by this record sends BD 0 and
+         * clears the sent state, then this record lands after it. */
         REC(OP_BD, on, pct);
+        s_bd_sent_on = on; s_bd_sent_pct = pct;
     }
 }
 
@@ -764,13 +766,30 @@ static void t_xfer_in(int x, int y, int w, int h, const uint16_t *d);
 /* VRAM the emulation thread left out of date: 16x16-pixel blocks a skipped
  * primitive may have drawn into (its whole drawing area). The picture side
  * holds the real contents there, so a GPU-mode resync must not send those
- * blocks back (it would paste an old frame over the live one). A transfer or
- * a fill that covers a block makes it current again; a copy carries its
- * source's state. */
+ * blocks back (it would paste an old frame over the live one): STALE_SKIP.
+ *
+ * Native-wide (GPU mode): the picture side draws every primitive aimed at a
+ * framebuffer twice, into the 4:3 framebuffer and into its wide surface, and
+ * presents the framebuffer's centre between the wide surface's sides. Records
+ * dropped while the page was behind leave both out of date by the same
+ * frames; a resync that pasted the emulation thread's newer framebuffer back
+ * would put a centre from one frame between sides from another until the game
+ * draws that buffer again, and resyncs come back while a page is slow, so the
+ * sides seemed frozen. The blocks drawn while a wide surface is the target
+ * are STALE_WIDE: while native-wide is on, a resync leaves them as the page
+ * has them (an older frame, whole, as when frames are dropped). Once it is
+ * off, they are sent like the rest.
+ *
+ * A transfer or a fill that covers a block makes it current again; a copy
+ * carries its source's state. */
 #define STALE_BW 64
 #define STALE_BH 32
+#define STALE_SKIP 1u
+#define STALE_WIDE 2u
 static uint8_t s_stale[STALE_BH][STALE_BW];
-static int s_stale_area[4] = { -1, -1, -1, -1 };   /* area last marked */
+static int s_stale_area[4] = { -1, -1, -1, -1 };   /* area last marked STALE_SKIP */
+static int s_wide_area[4] = { -1, -1, -1, -1 };    /* area last marked STALE_WIDE */
+/* Adds the bits v to the blocks of [x0, x1] x [y0, y1], or clears them (v = 0). */
 static void stale_set(int x0, int y0, int x1, int y1, int v, int whole_only) {
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
@@ -785,7 +804,8 @@ static void stale_set(int x0, int y0, int x1, int y1, int v, int whole_only) {
         if ((y1 & 15) != 15) by1--;
     }
     for (int by = by0; by <= by1; by++)
-        for (int bx = bx0; bx <= bx1; bx++) s_stale[by][bx] = (uint8_t)v;
+        for (int bx = bx0; bx <= bx1; bx++)
+            s_stale[by][bx] = v ? (uint8_t)(s_stale[by][bx] | v) : 0;
 }
 static uint32_t s_skipped_prims;
 static int s_sh_area[4] = { 0, 0, 1023, 511 };
@@ -793,9 +813,17 @@ static int skip_prim(void) {
     ++s_skipped_prims;
     if (memcmp(s_stale_area, s_sh_area, sizeof s_stale_area) != 0) {
         memcpy(s_stale_area, s_sh_area, sizeof s_stale_area);
-        stale_set(s_sh_area[0], s_sh_area[1], s_sh_area[2], s_sh_area[3], 1, 0);
+        stale_set(s_sh_area[0], s_sh_area[1], s_sh_area[2], s_sh_area[3], STALE_SKIP, 0);
     }
     return 1;
+}
+/* A primitive recorded while a wide surface is the target (GPU mode). */
+static void wide_prim(void) {
+    if (!s_gl_mode || !s_wide_w || !s_wide_target) return;
+    if (memcmp(s_wide_area, s_sh_area, sizeof s_wide_area) != 0) {
+        memcpy(s_wide_area, s_sh_area, sizeof s_wide_area);
+        stale_set(s_sh_area[0], s_sh_area[1], s_sh_area[2], s_sh_area[3], STALE_WIDE, 0);
+    }
 }
 /* Rectangle (with VRAM wrap) brought up to date by the emulation thread. */
 static void stale_clear_rect(int x, int y, int w, int h) {
@@ -808,14 +836,17 @@ static void stale_clear_rect(int x, int y, int w, int h) {
     if (w1 < w) stale_set(0, y, w - w1 - 1, y + h1 - 1, 0, 1);
     if (h1 < h) stale_set(x, 0, x + w1 - 1, h - h1 - 1, 0, 1);
     if (w1 < w && h1 < h) stale_set(0, 0, w - w1 - 1, h - h1 - 1, 0, 1);
-    s_stale_area[0] = -1;            /* the next skipped primitive re-marks */
+    s_stale_area[0] = -1;            /* the next primitive re-marks */
+    s_wide_area[0] = -1;
 }
+/* The bits of the blocks under the rectangle, together. */
 static int stale_any(int x, int y, int w, int h) {
+    int v = 0;
     for (int r = 0; r < h; r += 16)
         for (int c = 0; c < w; c += 16)
-            if (s_stale[((y + r) & 511) >> 4][((x + c) & 1023) >> 4]) return 1;
-    if (s_stale[((y + h - 1) & 511) >> 4][((x + w - 1) & 1023) >> 4]) return 1;
-    return 0;
+            v |= s_stale[((y + r) & 511) >> 4][((x + c) & 1023) >> 4];
+    v |= s_stale[((y + h - 1) & 511) >> 4][((x + w - 1) & 1023) >> 4];
+    return v;
 }
 static int s_skip_raster_cfg;
 static uint32_t s_quiet;             /* gameplay frames since the last read-back */
@@ -880,12 +911,14 @@ static void resync(void) {
     REC(OP_MASK, 0, 0);
     REC(OP_WIDE_OFF, 0);
     /* The authoritative VRAM, except what the emulation thread did not draw
+     * and, while native-wide is on, the framebuffers the page draws wide
      * (s_stale): the picture side's own contents stand there. */
+    const unsigned keep = STALE_SKIP | (s_wide_w && s_sh_target >= 0 ? STALE_WIDE : 0u);
     for (int by = 0; by < STALE_BH; by++) {
         for (int bx = 0; bx < STALE_BW;) {
-            if (s_stale[by][bx]) { bx++; continue; }
+            if (s_stale[by][bx] & keep) { bx++; continue; }
             int ex = bx;
-            while (ex < STALE_BW && !s_stale[by][ex]) ex++;
+            while (ex < STALE_BW && !(s_stale[by][ex] & keep)) ex++;
             rec_vram_rect(bx * 16, by * 16, (ex - bx) * 16, 16);
             bx = ex;
         }
@@ -963,52 +996,53 @@ static void t_fill(int x, int y, int w, int h, uint16_t c) {
 static void t_copy(int sx, int sy, int dx, int dy, int w, int h) {
     NAT(OP_COPY, sx, sy, dx, dy, w, h);
     if (w > 0 && h > 0) {
-        if (stale_any(sx, sy, w, h)) { stale_set(dx, dy, dx + w - 1, dy + h - 1, 1, 0); s_stale_area[0] = -1; }
-        else stale_clear_rect(dx, dy, w, h);
+        const int v = stale_any(sx, sy, w, h);
+        stale_clear_rect(dx, dy, w, h);
+        if (v) stale_set(dx, dy, dx + w - 1, dy + h - 1, v, 0);
     }
     REC(OP_COPY, sx, sy, dx, dy, w, h);
 }
 static void t_flat_tri(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t c) {
     if (!s_skip_raster) NAT(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
-    bd_sync(); REC(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
+    bd_sync(); wide_prim(); REC(OP_FLAT_TRI, x0, y0, x1, y1, x2, y2, c);
 }
 static void t_gour_tri(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1, int x2, int y2, uint16_t c2) {
     if (!s_skip_raster) NAT(OP_GOUR_TRI, x0, y0, c0, x1, y1, c1, x2, y2, c2);
-    bd_sync(); REC(OP_GOUR_TRI, x0, y0, c0, x1, y1, c1, x2, y2, c2);
+    bd_sync(); wide_prim(); REC(OP_GOUR_TRI, x0, y0, c0, x1, y1, c1, x2, y2, c2);
 }
 static void t_tex_tri(int x0, int y0, int u0, int v0, int x1, int y1, int u1, int v1,
                       int x2, int y2, int u2, int v2, uint16_t cx, uint16_t cy, uint16_t tp) {
     if (!s_skip_raster) NAT(OP_TEX_TRI, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
-    bd_sync(); REC(OP_TEX_TRI, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
+    bd_sync(); wide_prim(); REC(OP_TEX_TRI, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, cx, cy, tp);
 }
 static void t_stex_tri(int x0, int y0, int u0, int v0, uint32_t c0, int x1, int y1, int u1, int v1, uint32_t c1,
                        int x2, int y2, int u2, int v2, uint32_t c2, uint16_t cx, uint16_t cy, uint16_t tp, int raw) {
     const int32_t a[] = { x0, y0, u0, v0, (int32_t)c0, x1, y1, u1, v1, (int32_t)c1,
                           x2, y2, u2, v2, (int32_t)c2, cx, cy, tp, raw };
     if (!s_skip_raster) native(OP_STEX_TRI, 19, a);
-    bd_sync();
+    bd_sync(); wide_prim();
     rec_args(OP_STEX_TRI, 19, a);
 }
 static void t_flat_rect(int x, int y, int w, int h, uint16_t c) {
     if (!s_skip_raster) NAT(OP_FLAT_RECT, x, y, w, h, c);
-    bd_sync(); REC(OP_FLAT_RECT, x, y, w, h, c);
+    bd_sync(); wide_prim(); REC(OP_FLAT_RECT, x, y, w, h, c);
 }
 static void t_tex_rect(int x, int y, int w, int h, int u, int v, uint16_t cx, uint16_t cy, uint16_t tp) {
     if (!s_skip_raster) NAT(OP_TEX_RECT, x, y, w, h, u, v, cx, cy, tp);
-    bd_sync(); REC(OP_TEX_RECT, x, y, w, h, u, v, cx, cy, tp);
+    bd_sync(); wide_prim(); REC(OP_TEX_RECT, x, y, w, h, u, v, cx, cy, tp);
 }
 static void t_tex_rect_scaled(int x, int y, int w, int h, int u0, int v0, int u1, int v1,
                               uint16_t cx, uint16_t cy, uint16_t tp) {
     if (!s_skip_raster) NAT(OP_TEX_RECT_SCALED, x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
-    bd_sync(); REC(OP_TEX_RECT_SCALED, x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
+    bd_sync(); wide_prim(); REC(OP_TEX_RECT_SCALED, x, y, w, h, u0, v0, u1, v1, cx, cy, tp);
 }
 static void t_line(int x0, int y0, int x1, int y1, uint16_t c) {
     if (!s_skip_raster) NAT(OP_LINE, x0, y0, x1, y1, c);
-    bd_sync(); REC(OP_LINE, x0, y0, x1, y1, c);
+    bd_sync(); wide_prim(); REC(OP_LINE, x0, y0, x1, y1, c);
 }
 static void t_sline(int x0, int y0, uint16_t c0, int x1, int y1, uint16_t c1) {
     if (!s_skip_raster) NAT(OP_SLINE, x0, y0, c0, x1, y1, c1);
-    bd_sync(); REC(OP_SLINE, x0, y0, c0, x1, y1, c1);
+    bd_sync(); wide_prim(); REC(OP_SLINE, x0, y0, c0, x1, y1, c1);
 }
 static void t_pixel(int x, int y, uint16_t p) { NAT(OP_PIXEL, x, y, p); REC(OP_PIXEL, x, y, p); }
 static uint16_t t_read(int x, int y) { native_sync(); return sw_vram_read(x, y); }
@@ -1129,6 +1163,7 @@ int swt_publish(const uint32_t *px, int w, int h, int logical_w, int dst_w,
 static void t_vram_restored(void) {
     memset(s_stale, 0, sizeof s_stale);
     s_stale_area[0] = -1;
+    s_wide_area[0] = -1;
     t_xfer_in(0, 0, 1024, 512, s_vram);
 }
 
